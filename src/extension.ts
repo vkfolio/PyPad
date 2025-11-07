@@ -3,11 +3,13 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
+import { PythonLSPBridge } from './lspBridge';
 const stringArgvModule = require('string-argv');
 const stringArgv = stringArgvModule.default || stringArgvModule;
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined;
 let fileWatcher: vscode.FileSystemWatcher | undefined = undefined;
+let lspBridge: PythonLSPBridge | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('PythonPad extension is now active!');
@@ -89,6 +91,9 @@ function createWebviewPanel(context: vscode.ExtensionContext): vscode.WebviewPan
 
 	setupMessageHandlers(panel, context);
 	setupFileWatcher(panel);
+
+	// Initialize LSP bridge for full IntelliSense
+	lspBridge = new PythonLSPBridge(panel);
 
 	return panel;
 }
@@ -224,13 +229,29 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 					// Handle user input for interactive Python input()
 					if (activeProcess && activeProcess.proc.stdin) {
 						try {
+							// Write input with newline and flush
 							activeProcess.proc.stdin.write(message.input + '\n');
+
+							// Some systems need explicit flush
+							if (typeof activeProcess.proc.stdin.flush === 'function') {
+								activeProcess.proc.stdin.flush();
+							}
 						} catch (error: any) {
 							panel.webview.postMessage({
 								command: 'executionError',
 								error: `Failed to send input: ${error.message}`
 							});
 						}
+					}
+					break;
+
+				case 'initLSP':
+					// Initialize LSP bridge with file content
+					if (lspBridge && message.filename && message.content) {
+						const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pythonpad-lsp-'));
+						const filePath = path.join(tmpDir, message.filename);
+						await fs.writeFile(filePath, message.content);
+						await lspBridge.initialize(filePath, message.content);
 					}
 					break;
 
@@ -534,7 +555,6 @@ async function executeCode(
 			proc.stdout.on('data', (data) => {
 				const text = data.toString();
 				stdout += text;
-				pendingOutput += text;
 				lastOutputTime = Date.now();
 
 				// Send output chunk to webview
@@ -544,21 +564,27 @@ async function executeCode(
 					type: 'stdout'
 				});
 
+				// Track output for input detection
+				// Keep only the last line that doesn't end with newline
+				if (text.includes('\n')) {
+					const lines = text.split('\n');
+					pendingOutput = lines[lines.length - 1]; // Last line (might be empty)
+				} else {
+					pendingOutput += text;
+				}
+
 				// Detect input() prompt: output without trailing newline
 				if (!text.endsWith('\n') && !text.endsWith('\r\n')) {
 					setTimeout(() => {
 						const timeSinceOutput = Date.now() - lastOutputTime;
-						// If no new output for 100ms, likely waiting for input
-						if (timeSinceOutput >= 100 && pendingOutput.length > 0) {
+						// If no new output for 150ms, likely waiting for input
+						if (timeSinceOutput >= 150 && pendingOutput.length > 0) {
 							panel.webview.postMessage({
 								command: 'waitingForInput',
 								prompt: pendingOutput.trim()
 							});
-							pendingOutput = '';
 						}
-					}, 150);
-				} else {
-					pendingOutput = '';
+					}, 200);
 				}
 			});
 
@@ -592,8 +618,14 @@ async function executeCode(
 			}, 30000);
 		});
 	} finally {
-		// Cleanup temp directory
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		// Cleanup temp directory with delay for Windows file handle release
+		try {
+			await new Promise(r => setTimeout(r, 100));
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		} catch (cleanupError: any) {
+			// Ignore cleanup errors - they're not critical
+			console.warn(`Failed to cleanup temp directory: ${cleanupError.message}`);
+		}
 	}
 }
 
@@ -648,7 +680,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net;">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src blob:; font-src https://cdn.jsdelivr.net;">
 	<title>PythonPad</title>
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css">
 	<style>
@@ -1201,10 +1233,168 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			// Layout is handled by CSS flexbox now
 
-			// Register Python IntelliSense
+			// Register Python IntelliSense with LSP
+			let lspRequestId = 0;
+			const lspCompletionCache = new Map();
+
 			monaco.languages.registerCompletionItemProvider('python', {
-				provideCompletionItems: (model, position) => {
+				provideCompletionItems: async (model, position) => {
+					// Request completions from extension via LSP bridge
+					const requestId = ++lspRequestId;
+
+					// Send content update to LSP
+					vscode.postMessage({
+						type: 'lsp.updateContent',
+						content: model.getValue()
+					});
+
+					// Request completions
+					return new Promise((resolve) => {
+						const timeout = setTimeout(() => {
+							resolve({ suggestions: [] });
+						}, 1000);
+
+						// Store callback
+						lspCompletionCache.set(requestId, (completions) => {
+							clearTimeout(timeout);
+							const suggestions = completions.map(item => ({
+								label: item.label,
+								kind: item.kind,
+								insertText: item.insertText,
+								documentation: item.documentation,
+								detail: item.detail,
+								sortText: item.sortText,
+								filterText: item.filterText
+							}));
+							resolve({ suggestions });
+						});
+
+						// Send LSP completion request
+						vscode.postMessage({
+							type: 'lsp.completion',
+							id: requestId,
+							line: position.lineNumber - 1,  // Convert to 0-based
+							character: position.column - 1
+						});
+					});
+
+					// Fallback to static suggestions if LSP fails
 					const suggestions = [];
+
+					// Get the text before the cursor to detect dot notation
+					const textUntilPosition = model.getValueInRange({
+						startLineNumber: position.lineNumber,
+						startColumn: 1,
+						endLineNumber: position.lineNumber,
+						endColumn: position.column
+					});
+
+					// Check if we're completing after a dot (e.g., "datetime.")
+					const dotMatch = textUntilPosition.match(/(\w+)\.(\w*)$/);
+					if (dotMatch) {
+						const moduleName = dotMatch[1];
+
+						// Module attribute completions
+						const moduleAttrs = {
+							'datetime': [
+								{ name: 'datetime', sig: 'datetime(year, month, day, ...)', doc: 'Date and time class' },
+								{ name: 'date', sig: 'date(year, month, day)', doc: 'Date class' },
+								{ name: 'time', sig: 'time(hour=0, minute=0, second=0)', doc: 'Time class' },
+								{ name: 'timedelta', sig: 'timedelta(days=0, seconds=0, ...)', doc: 'Duration class' },
+								{ name: 'now', sig: 'datetime.now()', doc: 'Current datetime' },
+								{ name: 'today', sig: 'datetime.today()', doc: 'Current date' },
+								{ name: 'utcnow', sig: 'datetime.utcnow()', doc: 'Current UTC datetime' },
+								{ name: 'strptime', sig: 'strptime(date_string, format)', doc: 'Parse string to datetime' },
+								{ name: 'strftime', sig: 'strftime(format)', doc: 'Format datetime to string' },
+								{ name: 'timezone', sig: 'timezone(offset)', doc: 'Timezone class' }
+							],
+							'os': [
+								{ name: 'getcwd', sig: 'os.getcwd()', doc: 'Get current working directory' },
+								{ name: 'chdir', sig: 'os.chdir(path)', doc: 'Change directory' },
+								{ name: 'listdir', sig: 'os.listdir(path)', doc: 'List directory contents' },
+								{ name: 'mkdir', sig: 'os.mkdir(path)', doc: 'Create directory' },
+								{ name: 'makedirs', sig: 'os.makedirs(path)', doc: 'Create directories recursively' },
+								{ name: 'remove', sig: 'os.remove(path)', doc: 'Remove file' },
+								{ name: 'rename', sig: 'os.rename(src, dst)', doc: 'Rename file or directory' },
+								{ name: 'path', sig: 'os.path', doc: 'Path manipulation module' },
+								{ name: 'environ', sig: 'os.environ', doc: 'Environment variables dict' },
+								{ name: 'system', sig: 'os.system(command)', doc: 'Execute system command' }
+							],
+							'sys': [
+								{ name: 'argv', sig: 'sys.argv', doc: 'Command line arguments list' },
+								{ name: 'exit', sig: 'sys.exit(code=0)', doc: 'Exit the program' },
+								{ name: 'path', sig: 'sys.path', doc: 'Module search path list' },
+								{ name: 'version', sig: 'sys.version', doc: 'Python version string' },
+								{ name: 'platform', sig: 'sys.platform', doc: 'Platform identifier' },
+								{ name: 'stdin', sig: 'sys.stdin', doc: 'Standard input stream' },
+								{ name: 'stdout', sig: 'sys.stdout', doc: 'Standard output stream' },
+								{ name: 'stderr', sig: 'sys.stderr', doc: 'Standard error stream' }
+							],
+							'math': [
+								{ name: 'pi', sig: 'math.pi', doc: 'Pi constant (3.14159...)' },
+								{ name: 'e', sig: 'math.e', doc: 'Euler\'s number (2.71828...)' },
+								{ name: 'sqrt', sig: 'math.sqrt(x)', doc: 'Square root' },
+								{ name: 'pow', sig: 'math.pow(x, y)', doc: 'x raised to power y' },
+								{ name: 'floor', sig: 'math.floor(x)', doc: 'Round down to integer' },
+								{ name: 'ceil', sig: 'math.ceil(x)', doc: 'Round up to integer' },
+								{ name: 'sin', sig: 'math.sin(x)', doc: 'Sine of x (in radians)' },
+								{ name: 'cos', sig: 'math.cos(x)', doc: 'Cosine of x (in radians)' },
+								{ name: 'tan', sig: 'math.tan(x)', doc: 'Tangent of x (in radians)' },
+								{ name: 'log', sig: 'math.log(x, base=e)', doc: 'Logarithm' },
+								{ name: 'log10', sig: 'math.log10(x)', doc: 'Base-10 logarithm' },
+								{ name: 'degrees', sig: 'math.degrees(x)', doc: 'Convert radians to degrees' },
+								{ name: 'radians', sig: 'math.radians(x)', doc: 'Convert degrees to radians' }
+							],
+							'random': [
+								{ name: 'random', sig: 'random.random()', doc: 'Random float [0.0, 1.0)' },
+								{ name: 'randint', sig: 'random.randint(a, b)', doc: 'Random integer [a, b]' },
+								{ name: 'choice', sig: 'random.choice(seq)', doc: 'Random element from sequence' },
+								{ name: 'shuffle', sig: 'random.shuffle(seq)', doc: 'Shuffle sequence in place' },
+								{ name: 'sample', sig: 'random.sample(population, k)', doc: 'k random unique elements' },
+								{ name: 'uniform', sig: 'random.uniform(a, b)', doc: 'Random float [a, b]' },
+								{ name: 'seed', sig: 'random.seed(a=None)', doc: 'Initialize random number generator' }
+							],
+							'json': [
+								{ name: 'dumps', sig: 'json.dumps(obj)', doc: 'Serialize obj to JSON string' },
+								{ name: 'loads', sig: 'json.loads(s)', doc: 'Deserialize JSON string' },
+								{ name: 'dump', sig: 'json.dump(obj, fp)', doc: 'Serialize obj to file' },
+								{ name: 'load', sig: 'json.load(fp)', doc: 'Deserialize from file' }
+							],
+							'time': [
+								{ name: 'time', sig: 'time.time()', doc: 'Current time in seconds since epoch' },
+								{ name: 'sleep', sig: 'time.sleep(seconds)', doc: 'Pause execution' },
+								{ name: 'strftime', sig: 'time.strftime(format, t)', doc: 'Format time to string' },
+								{ name: 'strptime', sig: 'time.strptime(string, format)', doc: 'Parse string to time' },
+								{ name: 'localtime', sig: 'time.localtime(secs)', doc: 'Convert seconds to local time' },
+								{ name: 'gmtime', sig: 'time.gmtime(secs)', doc: 'Convert seconds to UTC time' }
+							],
+							're': [
+								{ name: 'match', sig: 're.match(pattern, string)', doc: 'Match pattern at start of string' },
+								{ name: 'search', sig: 're.search(pattern, string)', doc: 'Search for pattern in string' },
+								{ name: 'findall', sig: 're.findall(pattern, string)', doc: 'Find all matches' },
+								{ name: 'finditer', sig: 're.finditer(pattern, string)', doc: 'Iterator over matches' },
+								{ name: 'sub', sig: 're.sub(pattern, repl, string)', doc: 'Replace matches' },
+								{ name: 'split', sig: 're.split(pattern, string)', doc: 'Split by pattern' },
+								{ name: 'compile', sig: 're.compile(pattern)', doc: 'Compile regex pattern' }
+							]
+						};
+
+						if (moduleAttrs[moduleName]) {
+							moduleAttrs[moduleName].forEach(attr => {
+								suggestions.push({
+									label: attr.name,
+									kind: attr.name === attr.name.toUpperCase() || !attr.sig.includes('(')
+										? monaco.languages.CompletionItemKind.Property
+										: monaco.languages.CompletionItemKind.Method,
+									insertText: attr.sig.includes('()') ? \`\${attr.name}()\` : attr.name,
+									documentation: \`\${attr.sig}\\n\\n\${attr.doc}\`,
+									detail: attr.sig
+								});
+							});
+						}
+
+						return { suggestions };
+					}
 
 					// Python keywords
 					const keywords = [
@@ -1607,6 +1797,16 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			window.addEventListener('message', event => {
 				const message = event.data;
 
+				// Handle LSP responses
+				if (message.type && message.type.startsWith('lsp.')) {
+					if (message.type === 'lsp.completion.response' && lspCompletionCache.has(message.id)) {
+						const callback = lspCompletionCache.get(message.id);
+						callback(message.completions || []);
+						lspCompletionCache.delete(message.id);
+						return;
+					}
+				}
+
 				switch (message.command) {
 					case 'outputChunk':
 						// Real-time output streaming
@@ -1764,6 +1964,15 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				editor.setModel(data.model);
 				if (data.viewState) {
 					editor.restoreViewState(data.viewState);
+				}
+
+				// Initialize LSP for this file
+				if (name.endsWith('.py')) {
+					vscode.postMessage({
+						command: 'initLSP',
+						filename: name,
+						content: data.model.getValue()
+					});
 				}
 				activeFile = name;
 				editor.focus();
