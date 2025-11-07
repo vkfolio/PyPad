@@ -749,28 +749,43 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.toolbar button {
-			padding: 6px 12px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 6px;
+			padding: 6px 14px;
 			background: var(--vscode-button-background, #0e639c);
 			color: var(--vscode-button-foreground, #ffffff);
 			border: none;
-			border-radius: 2px;
+			border-radius: 4px;
 			cursor: pointer;
 			font-size: 13px;
 			font-weight: 500;
-			transition: background-color 0.15s ease;
+			line-height: 1;
+			transition: all 0.15s ease;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 		}
 
 		.toolbar button:hover {
 			background: var(--vscode-button-hoverBackground, #1177bb);
+			box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+			transform: translateY(-1px);
+		}
+
+		.toolbar button:active {
+			transform: translateY(0);
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 		}
 
 		.toolbar button:focus {
-			outline: 1px solid var(--vscode-focusBorder, #007acc);
+			outline: 2px solid var(--vscode-focusBorder, #007acc);
 			outline-offset: 2px;
 		}
 
 		.toolbar button.run {
 			background: var(--vscode-button-secondaryBackground, #16825d);
+			font-weight: 600;
+			padding: 6px 16px;
 		}
 
 		.toolbar button.run:hover {
@@ -780,6 +795,80 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		.toolbar button:disabled {
 			opacity: 0.5;
 			cursor: not-allowed;
+			transform: none !important;
+		}
+
+		.toolbar button svg {
+			width: 16px;
+			height: 16px;
+			fill: currentColor;
+		}
+
+		.toolbar button.icon-only {
+			padding: 8px;
+			min-width: 32px;
+		}
+
+		.toolbar button.run.icon-only {
+			padding: 8px 10px;
+		}
+
+		/* Tooltip styles */
+		.toolbar button[data-tooltip],
+		.console-toolbar button[data-tooltip] {
+			position: relative;
+		}
+
+		.toolbar button[data-tooltip]::after,
+		.console-toolbar button[data-tooltip]::after {
+			content: attr(data-tooltip);
+			position: absolute;
+			bottom: 100%;
+			left: 50%;
+			transform: translateX(-50%) translateY(-8px);
+			padding: 6px 10px;
+			background: var(--vscode-editorHoverWidget-background, #252526);
+			color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+			border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+			border-radius: 4px;
+			font-size: 12px;
+			white-space: nowrap;
+			pointer-events: none;
+			opacity: 0;
+			visibility: hidden;
+			transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+			z-index: 1000;
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+		}
+
+		.toolbar button[data-tooltip]:hover::after,
+		.console-toolbar button[data-tooltip]:hover::after {
+			opacity: 1;
+			visibility: visible;
+			transform: translateX(-50%) translateY(-4px);
+		}
+
+		.toolbar button[data-tooltip]::before,
+		.console-toolbar button[data-tooltip]::before {
+			content: '';
+			position: absolute;
+			bottom: 100%;
+			left: 50%;
+			transform: translateX(-50%) translateY(-2px);
+			border: 5px solid transparent;
+			border-top-color: var(--vscode-editorHoverWidget-border, #454545);
+			pointer-events: none;
+			opacity: 0;
+			visibility: hidden;
+			transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+			z-index: 1001;
+		}
+
+		.toolbar button[data-tooltip]:hover::before,
+		.console-toolbar button[data-tooltip]:hover::before {
+			opacity: 1;
+			visibility: visible;
+			transform: translateX(-50%) translateY(0);
 		}
 
 		.toolbar .spacer {
@@ -799,20 +888,30 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			background: var(--vscode-input-background, #3c3c3c);
 			color: var(--vscode-input-foreground, #d4d4d4);
 			border: 1px solid var(--vscode-input-border, #3e3e42);
-			padding: 4px 8px;
-			border-radius: 2px;
-			font-size: 12px;
-			transition: border-color 0.15s ease;
+			padding: 5px 10px;
+			border-radius: 3px;
+			font-size: 13px;
+			transition: all 0.15s ease;
 		}
 
 		.toolbar input[type="text"]:focus,
 		.toolbar select:focus {
 			outline: none;
 			border-color: var(--vscode-focusBorder, #007acc);
+			box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007acc);
+		}
+
+		.toolbar input[type="text"]:hover,
+		.toolbar select:hover {
+			border-color: var(--vscode-inputOption-hoverBackground, #5a5d5e);
 		}
 
 		.toolbar input[type="text"] {
 			min-width: 150px;
+		}
+
+		.toolbar select {
+			cursor: pointer;
 		}
 
 		.settings-dropdown {
@@ -916,25 +1015,35 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			display: flex;
 			align-items: center;
 			gap: 8px;
-			padding: 8px 12px;
+			padding: 10px 16px;
 			background: var(--vscode-tab-inactiveBackground, #2d2d30);
 			border-right: 1px solid var(--vscode-tab-border, #3e3e42);
 			cursor: pointer;
 			white-space: nowrap;
 			font-size: 13px;
-			color: var(--vscode-tab-inactiveForeground, #d4d4d4);
-			transition: background-color 0.15s ease, color 0.15s ease;
+			color: var(--vscode-tab-inactiveForeground, #a0a0a0);
+			transition: all 0.15s ease;
+			position: relative;
 		}
 
 		.tab:hover {
 			background: var(--vscode-tab-hoverBackground, #37373d);
-			color: var(--vscode-tab-hoverForeground, #d4d4d4);
+			color: var(--vscode-tab-hoverForeground, #e0e0e0);
 		}
 
 		.tab.active {
 			background: var(--vscode-tab-activeBackground, #1e1e1e);
 			color: var(--vscode-tab-activeForeground, #ffffff);
-			border-bottom: 2px solid var(--vscode-tab-activeBorder, #007acc);
+		}
+
+		.tab.active::after {
+			content: '';
+			position: absolute;
+			bottom: 0;
+			left: 0;
+			right: 0;
+			height: 2px;
+			background: var(--vscode-tab-activeBorder, #007acc);
 		}
 
 		.tab-close {
@@ -942,37 +1051,43 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			border: none;
 			color: var(--vscode-icon-foreground, #858585);
 			cursor: pointer;
-			padding: 0;
+			padding: 2px;
 			font-size: 16px;
 			line-height: 1;
-			width: 16px;
-			height: 16px;
+			width: 18px;
+			height: 18px;
 			display: flex;
 			align-items: center;
 			justify-content: center;
-			transition: background-color 0.15s ease, color 0.15s ease;
+			border-radius: 3px;
+			transition: all 0.15s ease;
+			opacity: 0.7;
+		}
+
+		.tab:hover .tab-close {
+			opacity: 1;
 		}
 
 		.tab-close:hover {
 			background: var(--vscode-toolbar-hoverBackground, #3e3e42);
-			border-radius: 2px;
-			color: var(--vscode-foreground, #d4d4d4);
+			color: var(--vscode-foreground, #ffffff);
 		}
 
 		.add-tab-btn {
-			padding: 8px 12px;
+			padding: 10px 14px;
 			background: none;
 			border: none;
 			color: var(--vscode-icon-foreground, #858585);
 			cursor: pointer;
 			font-size: 18px;
 			line-height: 1;
-			transition: background-color 0.15s ease, color 0.15s ease;
+			transition: all 0.15s ease;
+			border-radius: 3px;
 		}
 
 		.add-tab-btn:hover {
 			background: var(--vscode-toolbar-hoverBackground, #37373d);
-			color: var(--vscode-foreground, #d4d4d4);
+			color: var(--vscode-foreground, #ffffff);
 		}
 
 		.main-container {
@@ -1037,18 +1152,42 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.console-toolbar button {
-			padding: 4px 8px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 5px;
+			padding: 4px 10px;
 			background: var(--vscode-button-secondaryBackground, #3c3c3c);
 			color: var(--vscode-button-secondaryForeground, #d4d4d4);
 			border: none;
-			border-radius: 2px;
+			border-radius: 3px;
 			cursor: pointer;
 			font-size: 12px;
-			transition: background-color 0.15s ease;
+			line-height: 1;
+			transition: all 0.15s ease;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 		}
 
 		.console-toolbar button:hover {
 			background: var(--vscode-button-secondaryHoverBackground, #505050);
+			box-shadow: 0 2px 3px rgba(0, 0, 0, 0.12);
+			transform: translateY(-0.5px);
+		}
+
+		.console-toolbar button:active {
+			transform: translateY(0);
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+		}
+
+		.console-toolbar button svg {
+			width: 14px;
+			height: 14px;
+			fill: currentColor;
+		}
+
+		.console-toolbar button.icon-only {
+			padding: 6px;
+			min-width: 28px;
 		}
 
 		.console-content {
@@ -1175,24 +1314,42 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 </head>
 <body>
 	<div class="toolbar">
-		<button class="run" id="runBtn" title="Run main.py (Ctrl+Enter)">▶ Run</button>
-		<button id="formatBtn" title="Format code">Format</button>
-		<button id="newFileBtn" title="New file">+ New File</button>
-		<button id="openSingleFileBtn" title="Open a single file">📄 Open File</button>
-		<button id="openFileBtn" title="Open folder (auto-creates main.py)">📁 Open Folder</button>
+		<button class="run icon-only" id="runBtn" data-tooltip="Run main.py (Ctrl+Enter)">
+			<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+				<path d="M4 2.5L13 8L4 13.5V2.5Z"/>
+			</svg>
+		</button>
+		<button class="icon-only" id="formatBtn" data-tooltip="Format code">
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+				<path d="M120-120v-80h720v80H120Zm0-160v-80h480v80H120Zm0-160v-80h720v80H120Zm0-160v-80h480v80H120Zm0-160v-80h720v80H120Z"/>
+			</svg>
+		</button>
+		<button class="icon-only" id="newFileBtn" data-tooltip="New file">
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+				<path d="M320-240h320v-80H320v80Zm0-160h320v-80H320v80ZM240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H240Zm280-520v-200H240v640h480v-440H520ZM240-800v200-200 640-640Z"/>
+			</svg>
+		</button>
+		<button class="icon-only" id="openSingleFileBtn" data-tooltip="Open a single file">
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+				<path d="M240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v240h-80v-200H520v-200H240v640h360v80H240Zm638 15L760-183v89h-80v-226h226v80h-90l118 118-56 57Zm-638-95v-640 640Z"/>
+			</svg>
+		</button>
+		<button class="icon-only" id="openFileBtn" data-tooltip="Open folder (auto-creates main.py)">
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+				<path d="M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z"/>
+			</svg>
+		</button>
 		<label>
 			Args:
 			<input type="text" id="argsInput" placeholder="--flag value" title="Command-line arguments" />
 		</label>
-		<label>
-			Python:
-			<select id="pythonEnvSelect" title="Select Python interpreter">
-				<option value="python3">python3</option>
-			</select>
-		</label>
 		<div class="spacer"></div>
 		<div class="settings-dropdown">
-			<button class="settings-button" id="settingsBtn" title="Settings">⚙ Settings</button>
+			<button class="settings-button icon-only" id="settingsBtn" data-tooltip="Settings">
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+					<path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-2 13.5l103 78-110 190-118-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/>
+				</svg>
+			</button>
 			<div class="settings-menu" id="settingsMenu">
 				<div class="settings-item">
 					<label>
@@ -1214,13 +1371,18 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 						<option value="none">None</option>
 					</select>
 				</div>
+				<div class="settings-item">
+					<label>Python Interpreter:</label>
+					<select id="pythonEnvSelect">
+						<option value="python3">python3</option>
+					</select>
+				</div>
 			</div>
 		</div>
 	</div>
 
 	<div class="tabs-bar">
 		<div class="tabs-container" id="tabs"></div>
-		<button class="add-tab-btn" id="addTabBtn" title="New file">+</button>
 	</div>
 
 	<div class="main-container" id="mainContainer">
@@ -1233,8 +1395,16 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				<div class="console-tab active" data-tab="console">Console</div>
 			</div>
 			<div class="console-toolbar">
-				<button id="clearConsoleBtn">Clear</button>
-				<button id="saveFileBtn" title="Save current file (Ctrl+S)">💾 Save</button>
+				<button class="icon-only" id="clearConsoleBtn" data-tooltip="Clear console">
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+						<path d="M120-40v-280q0-83 58.5-141.5T320-520h40v-320q0-33 23.5-56.5T440-920h80q33 0 56.5 23.5T600-840v320h40q83 0 141.5 58.5T840-320v280H120Zm80-80h80v-120q0-17 11.5-28.5T320-280q17 0 28.5 11.5T360-240v120h80v-120q0-17 11.5-28.5T480-280q17 0 28.5 11.5T520-240v120h80v-120q0-17 11.5-28.5T640-280q17 0 28.5 11.5T680-240v120h80v-200q0-50-35-85t-85-35H320q-50 0-85 35t-35 85v200Zm320-400v-320h-80v320h80Zm0 0h-80 80Z"/>
+					</svg>
+				</button>
+				<button class="icon-only" id="saveFileBtn" data-tooltip="Save current file (Ctrl+S)">
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
+						<path d="M840-680v480q0 33-23.5 56.5T760-120H200q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h480l160 160Zm-80 34L646-760H200v560h560v-446ZM480-240q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35ZM240-560h360v-160H240v160Zm-40-86v446-560 114Z"/>
+					</svg>
+				</button>
 			</div>
 			<div class="console-content" id="consoleOutput"></div>
 			<div class="console-input-container" id="consoleInputContainer">
@@ -1709,10 +1879,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			document.getElementById('openFileBtn').addEventListener('click', () => {
 				vscode.postMessage({ command: 'openFolder' });
-			});
-
-			document.getElementById('addTabBtn').addEventListener('click', () => {
-				document.getElementById('newFileBtn').click();
 			});
 
 			document.getElementById('argsInput').addEventListener('input', saveState);
