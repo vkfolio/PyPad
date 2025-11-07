@@ -1048,6 +1048,187 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			// Request settings and interpreters
 			vscode.postMessage({ command: 'getSettings' });
 			vscode.postMessage({ command: 'getInterpreters' });
+
+			// Console Functions
+			function addConsoleOutput(text, type = 'stdout') {
+				const consoleDiv = document.getElementById('consoleOutput');
+				const line = document.createElement('div');
+				line.className = \`output-line \${type}\`;
+				line.textContent = text;
+				consoleDiv.appendChild(line);
+				consoleDiv.scrollTop = consoleDiv.scrollHeight;
+			}
+
+			function clearConsole() {
+				document.getElementById('consoleOutput').innerHTML = '';
+			}
+
+			// Code Execution - Always run main.py
+			function runCode() {
+				if (isRunning) return;
+
+				// Check if main.py exists
+				if (!files.has('main.py')) {
+					const create = confirm('main.py does not exist. Create it now?');
+					if (create) {
+						createFile('main.py', 'print("Hello from PythonPad!")\\n');
+						switchToFile('main.py');
+					} else {
+						addConsoleOutput('Error: main.py not found', 'error');
+						return;
+					}
+				}
+
+				clearConsole();
+				setRunning(true);
+
+				const argsValue = document.getElementById('argsInput').value.trim();
+				if (argsValue) {
+					addConsoleOutput(\`Running main.py with args: \${argsValue}\`, 'system');
+				} else {
+					addConsoleOutput('Running main.py...', 'system');
+				}
+
+				const filesObj = {};
+				for (const [name, data] of files) {
+					filesObj[name] = data.model.getValue();
+				}
+
+				vscode.postMessage({
+					command: 'execute',
+					files: filesObj,
+					entryPoint: 'main.py',  // Always run main.py
+					args: argsValue
+				});
+			}
+
+			function formatCode() {
+				const code = editor.getValue();
+				vscode.postMessage({
+					command: 'format',
+					code: code
+				});
+			}
+
+			function saveCurrentFile() {
+				const content = editor.getValue();
+				vscode.postMessage({
+					command: 'saveFile',
+					filename: activeFile,
+					content: content
+				});
+			}
+
+			function setRunning(running) {
+				isRunning = running;
+				const runBtn = document.getElementById('runBtn');
+				runBtn.disabled = running;
+				runBtn.textContent = running ? '⏳ Running...' : '▶ Run';
+			}
+
+			// Settings Management
+			function applySettings(newSettings) {
+				settings = { ...settings, ...newSettings };
+
+				editor.updateOptions({
+					quickSuggestions: settings.enableIntelliSense,
+					parameterHints: { enabled: settings.enableIntelliSense },
+					suggestOnTriggerCharacters: settings.enableIntelliSense,
+					theme: settings.theme === 'dark' ? 'vs-dark' : 'vs',
+					fontSize: settings.fontSize
+				});
+
+				document.getElementById('intellisenseToggle').checked = settings.enableIntelliSense;
+				document.getElementById('formatOnSaveToggle').checked = settings.formatOnSave;
+				document.getElementById('formatterSelect').value = settings.formatter;
+				document.getElementById('themeSelect').value = settings.theme;
+			}
+
+			function updateSetting(key, value) {
+				vscode.postMessage({
+					command: 'updateSetting',
+					key: key,
+					value: value
+				});
+			}
+
+			// Event Listeners
+			document.getElementById('runBtn').addEventListener('click', runCode);
+			document.getElementById('formatBtn').addEventListener('click', formatCode);
+			document.getElementById('clearConsoleBtn').addEventListener('click', clearConsole);
+			document.getElementById('saveFileBtn').addEventListener('click', saveCurrentFile);
+
+			document.getElementById('newFileBtn').addEventListener('click', () => {
+				const filename = prompt('Enter filename (e.g., utils.py):', 'untitled.py');
+				if (filename && !files.has(filename)) {
+					createFile(filename, '');
+					switchToFile(filename);
+					// Auto-save new file to workspace folder after a short delay
+					setTimeout(() => {
+						saveCurrentFile();
+					}, 100);
+				} else if (filename) {
+					alert('File already exists!');
+				}
+			});
+
+			document.getElementById('openFileBtn').addEventListener('click', () => {
+				vscode.postMessage({ command: 'openFile' });
+			});
+
+			document.getElementById('addTabBtn').addEventListener('click', () => {
+				document.getElementById('newFileBtn').click();
+			});
+
+			document.getElementById('argsInput').addEventListener('input', saveState);
+
+			document.getElementById('pythonEnvSelect').addEventListener('change', (e) => {
+				vscode.postMessage({
+					command: 'setInterpreter',
+					path: e.target.value
+				});
+			});
+
+			// Settings dropdown
+			document.getElementById('settingsBtn').addEventListener('click', (e) => {
+				e.stopPropagation();
+				document.getElementById('settingsMenu').classList.toggle('show');
+			});
+
+			document.addEventListener('click', () => {
+				document.getElementById('settingsMenu').classList.remove('show');
+			});
+
+			document.getElementById('settingsMenu').addEventListener('click', (e) => {
+				e.stopPropagation();
+			});
+
+			document.getElementById('intellisenseToggle').addEventListener('change', (e) => {
+				updateSetting('enableIntelliSense', e.target.checked);
+			});
+
+			document.getElementById('formatOnSaveToggle').addEventListener('change', (e) => {
+				updateSetting('formatOnSave', e.target.checked);
+			});
+
+			document.getElementById('formatterSelect').addEventListener('change', (e) => {
+				updateSetting('formatter', e.target.value);
+			});
+
+			document.getElementById('themeSelect').addEventListener('change', (e) => {
+				updateSetting('theme', e.target.value);
+			});
+
+			// Keyboard shortcuts
+			window.addEventListener('keydown', (e) => {
+				if (e.ctrlKey && e.key === 'Enter') {
+					e.preventDefault();
+					runCode();
+				} else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+					e.preventDefault();
+					saveCurrentFile();
+				}
+			});
 		});
 
 		// File Management
@@ -1145,187 +1326,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			};
 			return langMap[ext] || 'plaintext';
 		}
-
-		// Console Functions
-		function addConsoleOutput(text, type = 'stdout') {
-			const consoleDiv = document.getElementById('consoleOutput');
-			const line = document.createElement('div');
-			line.className = \`output-line \${type}\`;
-			line.textContent = text;
-			consoleDiv.appendChild(line);
-			consoleDiv.scrollTop = consoleDiv.scrollHeight;
-		}
-
-		function clearConsole() {
-			document.getElementById('consoleOutput').innerHTML = '';
-		}
-
-		// Code Execution - Always run main.py
-		function runCode() {
-			if (isRunning) return;
-
-			// Check if main.py exists
-			if (!files.has('main.py')) {
-				const create = confirm('main.py does not exist. Create it now?');
-				if (create) {
-					createFile('main.py', 'print("Hello from PythonPad!")\\n');
-					switchToFile('main.py');
-				} else {
-					addConsoleOutput('Error: main.py not found', 'error');
-					return;
-				}
-			}
-
-			clearConsole();
-			setRunning(true);
-
-			const argsValue = document.getElementById('argsInput').value.trim();
-			if (argsValue) {
-				addConsoleOutput(\`Running main.py with args: \${argsValue}\`, 'system');
-			} else {
-				addConsoleOutput('Running main.py...', 'system');
-			}
-
-			const filesObj = {};
-			for (const [name, data] of files) {
-				filesObj[name] = data.model.getValue();
-			}
-
-			vscode.postMessage({
-				command: 'execute',
-				files: filesObj,
-				entryPoint: 'main.py',  // Always run main.py
-				args: argsValue
-			});
-		}
-
-		function formatCode() {
-			const code = editor.getValue();
-			vscode.postMessage({
-				command: 'format',
-				code: code
-			});
-		}
-
-		function saveCurrentFile() {
-			const content = editor.getValue();
-			vscode.postMessage({
-				command: 'saveFile',
-				filename: activeFile,
-				content: content
-			});
-		}
-
-		function setRunning(running) {
-			isRunning = running;
-			const runBtn = document.getElementById('runBtn');
-			runBtn.disabled = running;
-			runBtn.textContent = running ? '⏳ Running...' : '▶ Run';
-		}
-
-		// Settings Management
-		function applySettings(newSettings) {
-			settings = { ...settings, ...newSettings };
-
-			editor.updateOptions({
-				quickSuggestions: settings.enableIntelliSense,
-				parameterHints: { enabled: settings.enableIntelliSense },
-				suggestOnTriggerCharacters: settings.enableIntelliSense,
-				theme: settings.theme === 'dark' ? 'vs-dark' : 'vs',
-				fontSize: settings.fontSize
-			});
-
-			document.getElementById('intellisenseToggle').checked = settings.enableIntelliSense;
-			document.getElementById('formatOnSaveToggle').checked = settings.formatOnSave;
-			document.getElementById('formatterSelect').value = settings.formatter;
-			document.getElementById('themeSelect').value = settings.theme;
-		}
-
-		function updateSetting(key, value) {
-			vscode.postMessage({
-				command: 'updateSetting',
-				key: key,
-				value: value
-			});
-		}
-
-		// Event Listeners
-		document.getElementById('runBtn').addEventListener('click', runCode);
-		document.getElementById('formatBtn').addEventListener('click', formatCode);
-		document.getElementById('clearConsoleBtn').addEventListener('click', clearConsole);
-		document.getElementById('saveFileBtn').addEventListener('click', saveCurrentFile);
-
-		document.getElementById('newFileBtn').addEventListener('click', () => {
-			const filename = prompt('Enter filename (e.g., utils.py):', 'untitled.py');
-			if (filename && !files.has(filename)) {
-				createFile(filename, '');
-				switchToFile(filename);
-				// Auto-save new file to workspace folder after a short delay
-				setTimeout(() => {
-					saveCurrentFile();
-				}, 100);
-			} else if (filename) {
-				alert('File already exists!');
-			}
-		});
-
-		document.getElementById('openFileBtn').addEventListener('click', () => {
-			vscode.postMessage({ command: 'openFile' });
-		});
-
-		document.getElementById('addTabBtn').addEventListener('click', () => {
-			document.getElementById('newFileBtn').click();
-		});
-
-		document.getElementById('argsInput').addEventListener('input', saveState);
-
-		document.getElementById('pythonEnvSelect').addEventListener('change', (e) => {
-			vscode.postMessage({
-				command: 'setInterpreter',
-				path: e.target.value
-			});
-		});
-
-		// Settings dropdown
-		document.getElementById('settingsBtn').addEventListener('click', (e) => {
-			e.stopPropagation();
-			document.getElementById('settingsMenu').classList.toggle('show');
-		});
-
-		document.addEventListener('click', () => {
-			document.getElementById('settingsMenu').classList.remove('show');
-		});
-
-		document.getElementById('settingsMenu').addEventListener('click', (e) => {
-			e.stopPropagation();
-		});
-
-		document.getElementById('intellisenseToggle').addEventListener('change', (e) => {
-			updateSetting('enableIntelliSense', e.target.checked);
-		});
-
-		document.getElementById('formatOnSaveToggle').addEventListener('change', (e) => {
-			updateSetting('formatOnSave', e.target.checked);
-		});
-
-		document.getElementById('formatterSelect').addEventListener('change', (e) => {
-			updateSetting('formatter', e.target.value);
-		});
-
-		document.getElementById('themeSelect').addEventListener('change', (e) => {
-			updateSetting('theme', e.target.value);
-		});
-
-		// Keyboard shortcuts
-		window.addEventListener('keydown', (e) => {
-			if (e.ctrlKey && e.key === 'Enter') {
-				e.preventDefault();
-				runCode();
-			} else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-				e.preventDefault();
-				saveCurrentFile();
-			}
-		});
 
 		// Message Handler
 		window.addEventListener('message', event => {
