@@ -3,19 +3,16 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { PythonLSPBridge, registerVirtualDocumentProvider } from './lspBridge';
+import { PythonLSPServer } from './lspServer';
 const stringArgvModule = require('string-argv');
 const stringArgv = stringArgvModule.default || stringArgvModule;
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined;
 let fileWatcher: vscode.FileSystemWatcher | undefined = undefined;
-let lspBridge: PythonLSPBridge | undefined = undefined;
+let lspServer: PythonLSPServer | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('PythonPad extension is now active!');
-
-	// Register virtual document provider for full Pylance IntelliSense
-	registerVirtualDocumentProvider(context);
 
 	// Register main command
 	const openCmd = vscode.commands.registerCommand('pythonpad.open', () => {
@@ -30,6 +27,10 @@ export function activate(context: vscode.ExtensionContext) {
 					if (fileWatcher) {
 						fileWatcher.dispose();
 						fileWatcher = undefined;
+					}
+					if (lspServer) {
+						lspServer.stop();
+						lspServer = undefined;
 					}
 				},
 				null,
@@ -95,8 +96,27 @@ function createWebviewPanel(context: vscode.ExtensionContext): vscode.WebviewPan
 	setupMessageHandlers(panel, context);
 	setupFileWatcher(panel);
 
-	// Initialize LSP bridge for full IntelliSense
-	lspBridge = new PythonLSPBridge(panel);
+	// Start Python LSP server for IntelliSense
+	const config = vscode.workspace.getConfiguration('pythonpad');
+	const enableIntelliSense = config.get<boolean>('enableIntelliSense', true);
+
+	if (enableIntelliSense) {
+		lspServer = new PythonLSPServer();
+		lspServer.start().then((wsPort) => {
+			// Send WebSocket port to webview
+			panel.webview.postMessage({
+				command: 'lspServerReady',
+				port: wsPort
+			});
+			console.log(`LSP server ready, notified webview about port ${wsPort}`);
+		}).catch((error) => {
+			vscode.window.showErrorMessage(
+				`Failed to start Python LSP server: ${error.message}\n\n` +
+				`Please install it with: pip install "python-lsp-server[websockets]"`
+			);
+			console.error('LSP server start failed:', error);
+		});
+	}
 
 	return panel;
 }
@@ -245,13 +265,6 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 								error: `Failed to send input: ${error.message}`
 							});
 						}
-					}
-					break;
-
-				case 'initLSP':
-					// Initialize LSP bridge with virtual document
-					if (lspBridge && message.filename && message.content) {
-						await lspBridge.initialize(message.filename, message.content);
 					}
 					break;
 
@@ -680,7 +693,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src blob:; font-src https://cdn.jsdelivr.net;">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src blob:; font-src https://cdn.jsdelivr.net; connect-src ws://localhost:* ws://127.0.0.1:*;">
 	<title>PythonPad</title>
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css">
 	<style>
@@ -1233,53 +1246,265 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			// Layout is handled by CSS flexbox now
 
-			// Register Python IntelliSense with LSP (all completions handled by Pylance)
-			let lspRequestId = 0;
-			const lspCompletionCache = new Map();
+			// Lightweight LSP Client over WebSocket (no external dependencies)
+			let lspWebSocket = null;
+			let lspReady = false;
+			let lspMessageId = 0;
+			let lspPendingRequests = new Map();
 
-			monaco.languages.registerCompletionItemProvider('python', {
-				provideCompletionItems: async (model, position) => {
-					// Request completions from extension via LSP bridge (Pylance)
-					const requestId = ++lspRequestId;
+			// Listen for LSP server ready message from extension
+			window.addEventListener('message', (event) => {
+				const message = event.data;
+				if (message.command === 'lspServerReady') {
+					initializeLanguageClient(message.port);
+				}
+			});
 
-					// Send content update to LSP
-					vscode.postMessage({
-						type: 'lsp.updateContent',
-						content: model.getValue()
-					});
+			function initializeLanguageClient(wsPort) {
+				try {
+					console.log('Initializing LSP Client on port', wsPort);
 
-					// Request completions from Pylance
-					return new Promise((resolve) => {
-						const timeout = setTimeout(() => {
-							resolve({ suggestions: [] });
-						}, 2000); // Increased timeout for Pylance
+					// Create WebSocket connection to python-lsp-server
+					lspWebSocket = new WebSocket(\`ws://localhost:\${wsPort}\`);
 
-						// Store callback
-						lspCompletionCache.set(requestId, (completions) => {
-							clearTimeout(timeout);
-							const suggestions = completions.map(item => ({
-								label: item.label,
-								kind: item.kind,
-								insertText: item.insertText || item.label,
+					lspWebSocket.onopen = () => {
+						console.log('WebSocket connected to python-lsp-server');
+
+						// Send LSP initialize request
+						sendLSPRequest('initialize', {
+							processId: null,
+							clientInfo: {
+								name: 'PythonPad',
+								version: '1.0.0'
+							},
+							rootUri: 'file:///pythonpad',
+							capabilities: {
+								textDocument: {
+									completion: {
+										completionItem: {
+											snippetSupport: true
+										}
+									},
+									hover: {
+										contentFormat: ['markdown', 'plaintext']
+									}
+								}
+							},
+							workspaceFolders: [{
+								uri: 'file:///pythonpad',
+								name: 'PythonPad'
+							}]
+						}).then((initResult) => {
+							console.log('LSP initialized:', initResult);
+							// Send initialized notification
+							sendLSPNotification('initialized', {});
+							lspReady = true;
+
+							// Register Monaco language features
+							registerMonacoLanguageFeatures();
+						}).catch((error) => {
+							console.error('LSP initialization failed:', error);
+						});
+					};
+
+					lspWebSocket.onmessage = (event) => {
+						try {
+							const message = JSON.parse(event.data);
+							handleLSPMessage(message);
+						} catch (error) {
+							console.error('Failed to parse LSP message:', error);
+						}
+					};
+
+					lspWebSocket.onerror = (error) => {
+						console.error('WebSocket error:', error);
+					};
+
+					lspWebSocket.onclose = () => {
+						console.log('WebSocket closed');
+						lspReady = false;
+					};
+
+				} catch (error) {
+					console.error('Failed to initialize language client:', error);
+				}
+			}
+
+			function sendLSPRequest(method, params) {
+				return new Promise((resolve, reject) => {
+					const id = ++lspMessageId;
+					const message = {
+						jsonrpc: '2.0',
+						id: id,
+						method: method,
+						params: params
+					};
+
+					lspPendingRequests.set(id, { resolve, reject });
+					lspWebSocket.send(JSON.stringify(message));
+
+					// Timeout after 5 seconds
+					setTimeout(() => {
+						if (lspPendingRequests.has(id)) {
+							lspPendingRequests.delete(id);
+							reject(new Error('LSP request timeout'));
+						}
+					}, 5000);
+				});
+			}
+
+			function sendLSPNotification(method, params) {
+				const message = {
+					jsonrpc: '2.0',
+					method: method,
+					params: params
+				};
+				lspWebSocket.send(JSON.stringify(message));
+			}
+
+			function handleLSPMessage(message) {
+				if (message.id !== undefined && lspPendingRequests.has(message.id)) {
+					const { resolve, reject } = lspPendingRequests.get(message.id);
+					lspPendingRequests.delete(message.id);
+
+					if (message.error) {
+						reject(new Error(message.error.message || 'LSP error'));
+					} else {
+						resolve(message.result);
+					}
+				}
+			}
+
+			function registerMonacoLanguageFeatures() {
+				// Track open documents
+				const openDocuments = new Map();
+
+				// Helper to create document URI
+				function getDocumentUri(filename) {
+					return \`file:///pythonpad/\${filename}\`;
+				}
+
+				// Helper to notify LSP of document open
+				function didOpenDocument(filename, content) {
+					const uri = getDocumentUri(filename);
+					if (!openDocuments.has(uri)) {
+						sendLSPNotification('textDocument/didOpen', {
+							textDocument: {
+								uri: uri,
+								languageId: 'python',
+								version: 1,
+								text: content
+							}
+						});
+						openDocuments.set(uri, { version: 1, content });
+						console.log('Opened document in LSP:', uri);
+					}
+				}
+
+				// Helper to notify LSP of document changes
+				function didChangeDocument(filename, content) {
+					const uri = getDocumentUri(filename);
+					const docInfo = openDocuments.get(uri);
+					if (docInfo) {
+						const newVersion = docInfo.version + 1;
+						sendLSPNotification('textDocument/didChange', {
+							textDocument: {
+								uri: uri,
+								version: newVersion
+							},
+							contentChanges: [{
+								text: content
+							}]
+						});
+						openDocuments.set(uri, { version: newVersion, content });
+					} else {
+						// Document not open yet, open it
+						didOpenDocument(filename, content);
+					}
+				}
+
+				// Open current file
+				didOpenDocument(activeFile, editor.getValue());
+
+				// Listen for content changes
+				editor.onDidChangeModelContent(() => {
+					didChangeDocument(activeFile, editor.getValue());
+				});
+
+				// Register completion provider
+				monaco.languages.registerCompletionItemProvider('python', {
+					provideCompletionItems: async (model, position) => {
+						if (!lspReady) {
+							return { suggestions: [] };
+						}
+
+						try {
+							const uri = getDocumentUri(activeFile);
+							const result = await sendLSPRequest('textDocument/completion', {
+								textDocument: { uri },
+								position: {
+									line: position.lineNumber - 1,
+									character: position.column - 1
+								},
+								context: {
+									triggerKind: 1
+								}
+							});
+
+							const items = result?.items || (Array.isArray(result) ? result : []);
+							const suggestions = items.map(item => ({
+								label: typeof item.label === 'string' ? item.label : item.label.label || item.label,
+								kind: convertCompletionKind(item.kind),
+								insertText: item.insertText || (typeof item.label === 'string' ? item.label : item.label.label),
 								documentation: item.documentation,
 								detail: item.detail,
 								sortText: item.sortText,
 								filterText: item.filterText
 							}));
-							resolve({ suggestions });
-						});
 
-						// Send LSP completion request
-						vscode.postMessage({
-							type: 'lsp.completion',
-							id: requestId,
-							line: position.lineNumber - 1,  // Convert to 0-based
-							character: position.column - 1
-						});
-					});
-				},
-				triggerCharacters: ['.', ' ', ...Array.from('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')]
-			});
+							return { suggestions };
+						} catch (error) {
+							console.error('Completion error:', error);
+							return { suggestions: [] };
+						}
+					},
+					triggerCharacters: ['.', ' ']
+				});
+
+				// Helper to convert LSP completion kind to Monaco kind
+				function convertCompletionKind(kind) {
+					const kindMap = {
+						1: monaco.languages.CompletionItemKind.Text,
+						2: monaco.languages.CompletionItemKind.Method,
+						3: monaco.languages.CompletionItemKind.Function,
+						4: monaco.languages.CompletionItemKind.Constructor,
+						5: monaco.languages.CompletionItemKind.Field,
+						6: monaco.languages.CompletionItemKind.Variable,
+						7: monaco.languages.CompletionItemKind.Class,
+						8: monaco.languages.CompletionItemKind.Interface,
+						9: monaco.languages.CompletionItemKind.Module,
+						10: monaco.languages.CompletionItemKind.Property,
+						11: monaco.languages.CompletionItemKind.Unit,
+						12: monaco.languages.CompletionItemKind.Value,
+						13: monaco.languages.CompletionItemKind.Enum,
+						14: monaco.languages.CompletionItemKind.Keyword,
+						15: monaco.languages.CompletionItemKind.Snippet,
+						16: monaco.languages.CompletionItemKind.Color,
+						17: monaco.languages.CompletionItemKind.File,
+						18: monaco.languages.CompletionItemKind.Reference,
+						19: monaco.languages.CompletionItemKind.Folder,
+						20: monaco.languages.CompletionItemKind.EnumMember,
+						21: monaco.languages.CompletionItemKind.Constant,
+						22: monaco.languages.CompletionItemKind.Struct,
+						23: monaco.languages.CompletionItemKind.Event,
+						24: monaco.languages.CompletionItemKind.Operator,
+						25: monaco.languages.CompletionItemKind.TypeParameter
+					};
+					return kindMap[kind] || monaco.languages.CompletionItemKind.Text;
+				}
+
+				console.log('Monaco language features registered');
+			}
 
 
 			// Load saved state or create default
@@ -1679,14 +1904,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 					editor.restoreViewState(data.viewState);
 				}
 
-				// Initialize LSP for this file
-				if (name.endsWith('.py')) {
-					vscode.postMessage({
-						command: 'initLSP',
-						filename: name,
-						content: data.model.getValue()
-					});
-				}
 				activeFile = name;
 				editor.focus();
 				renderTabs();
