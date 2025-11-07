@@ -3,7 +3,8 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-const stringArgv = require('string-argv');
+const stringArgvModule = require('string-argv');
+const stringArgv = stringArgvModule.default || stringArgvModule;
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined;
 let fileWatcher: vscode.FileSystemWatcher | undefined = undefined;
@@ -246,9 +247,65 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 					}
 					break;
 
-				case 'openFile':
+				case 'promptNewFile':
 					try {
-						// Select folder instead of file
+						const filename = await vscode.window.showInputBox({
+							prompt: 'Enter filename (e.g., utils.py)',
+							value: 'untitled.py',
+							validateInput: (value) => {
+								if (!value) {
+									return 'Filename cannot be empty';
+								}
+								if (!/^[a-zA-Z0-9_\-\.]+$/.test(value)) {
+									return 'Invalid filename';
+								}
+								return null;
+							}
+						});
+
+						if (filename) {
+							panel.webview.postMessage({
+								command: 'createNewFile',
+								filename: filename
+							});
+						}
+					} catch (error: any) {
+						vscode.window.showErrorMessage(`Create file failed: ${error.message}`);
+					}
+					break;
+
+				case 'openSingleFile':
+					try {
+						// Select single file
+						const fileUri = await vscode.window.showOpenDialog({
+							canSelectMany: false,
+							openLabel: 'Open File',
+							canSelectFiles: true,
+							canSelectFolders: false,
+							filters: {
+								'Supported Files': ['py', 'txt', 'json', 'csv', 'md', 'js', 'ts', 'html', 'css']
+							}
+						});
+
+						if (fileUri && fileUri[0]) {
+							const content = await vscode.workspace.fs.readFile(fileUri[0]);
+							const text = Buffer.from(content).toString('utf8');
+							const filename = path.basename(fileUri[0].fsPath);
+
+							panel.webview.postMessage({
+								command: 'openFileContent',
+								filename: filename,
+								content: text
+							});
+						}
+					} catch (error: any) {
+						vscode.window.showErrorMessage(`Open file failed: ${error.message}`);
+					}
+					break;
+
+				case 'openFolder':
+					try {
+						// Select folder
 						const folderUri = await vscode.window.showOpenDialog({
 							canSelectMany: false,
 							openLabel: 'Select Folder',
@@ -827,6 +884,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			font-family: 'Consolas', 'Courier New', monospace;
 			font-size: 13px;
 			line-height: 1.5;
+			background: #0e0e0e;
 		}
 
 		.console-content::-webkit-scrollbar {
@@ -887,6 +945,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		<button class="run" id="runBtn" title="Run main.py (Ctrl+Enter)">▶ Run</button>
 		<button id="formatBtn" title="Format code">Format</button>
 		<button id="newFileBtn" title="New file">+ New File</button>
+		<button id="openSingleFileBtn" title="Open a single file">📄 Open File</button>
 		<button id="openFileBtn" title="Open folder (auto-creates main.py)">📁 Open Folder</button>
 		<label>
 			Args:
@@ -956,7 +1015,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 	</div>
 
 	<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/split.js@1.6.5/dist/split.min.js"></script>
 	<script>
 		const vscode = acquireVsCodeApi();
 		let editor;
@@ -1024,17 +1082,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				suggestOnTriggerCharacters: true
 			});
 
-			// Initialize Split.js
-			Split(['#editorPane', '#consolePane'], {
-				sizes: [60, 40],
-				minSize: [200, 200],
-				gutterSize: 8,
-				cursor: 'col-resize',
-				direction: 'horizontal',
-				onDragEnd: function() {
-					editor.layout();
-				}
-			});
+			// Layout is handled by CSS flexbox now
 
 			// Load saved state or create default
 			const state = vscode.getState();
@@ -1069,14 +1117,10 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 				// Check if main.py exists
 				if (!files.has('main.py')) {
-					const create = confirm('main.py does not exist. Create it now?');
-					if (create) {
-						createFile('main.py', 'print("Hello from PythonPad!")\\n');
-						switchToFile('main.py');
-					} else {
-						addConsoleOutput('Error: main.py not found', 'error');
-						return;
-					}
+					// Auto-create main.py
+					createFile('main.py', 'print("Hello from PythonPad!")\\n');
+					switchToFile('main.py');
+					addConsoleOutput('Created main.py', 'system');
 				}
 
 				clearConsole();
@@ -1159,21 +1203,15 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			document.getElementById('saveFileBtn').addEventListener('click', saveCurrentFile);
 
 			document.getElementById('newFileBtn').addEventListener('click', () => {
-				const filename = prompt('Enter filename (e.g., utils.py):', 'untitled.py');
-				if (filename && !files.has(filename)) {
-					createFile(filename, '');
-					switchToFile(filename);
-					// Auto-save new file to workspace folder after a short delay
-					setTimeout(() => {
-						saveCurrentFile();
-					}, 100);
-				} else if (filename) {
-					alert('File already exists!');
-				}
+				vscode.postMessage({ command: 'promptNewFile' });
+			});
+
+			document.getElementById('openSingleFileBtn').addEventListener('click', () => {
+				vscode.postMessage({ command: 'openSingleFile' });
 			});
 
 			document.getElementById('openFileBtn').addEventListener('click', () => {
-				vscode.postMessage({ command: 'openFile' });
+				vscode.postMessage({ command: 'openFolder' });
 			});
 
 			document.getElementById('addTabBtn').addEventListener('click', () => {
@@ -1227,6 +1265,129 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				} else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
 					e.preventDefault();
 					saveCurrentFile();
+				}
+			});
+
+			// Message Handler
+			window.addEventListener('message', event => {
+				const message = event.data;
+
+				switch (message.command) {
+					case 'executionResult':
+						setRunning(false);
+						if (message.output) {
+							addConsoleOutput(message.output, 'stdout');
+						}
+						if (message.errors) {
+							addConsoleOutput(message.errors, 'stderr');
+						}
+						if (message.exitCode === 0) {
+							addConsoleOutput(\`Exited with code \${message.exitCode}\`, 'success');
+						} else {
+							addConsoleOutput(\`Exited with code \${message.exitCode}\`, 'error');
+						}
+						break;
+
+					case 'executionError':
+						setRunning(false);
+						addConsoleOutput(message.error, 'error');
+						break;
+
+					case 'formatted':
+						editor.setValue(message.code);
+						break;
+
+					case 'settingsUpdated':
+						applySettings(message.settings);
+						break;
+
+					case 'interpretersList':
+						const select = document.getElementById('pythonEnvSelect');
+						select.innerHTML = '';
+						message.interpreters.forEach(path => {
+							const option = document.createElement('option');
+							option.value = path;
+							option.textContent = path;
+							if (path === message.selected) {
+								option.selected = true;
+							}
+							select.appendChild(option);
+						});
+						break;
+
+					case 'createNewFile':
+						if (files.has(message.filename)) {
+							addConsoleOutput(\`File \${message.filename} already exists!\`, 'error');
+						} else {
+							createFile(message.filename, '');
+							switchToFile(message.filename);
+							// Auto-save new file to workspace folder
+							setTimeout(() => {
+								saveCurrentFile();
+							}, 100);
+						}
+						break;
+
+					case 'openFileContent':
+						if (!files.has(message.filename)) {
+							createFile(message.filename, message.content);
+						} else {
+							const data = files.get(message.filename);
+							data.model.setValue(message.content);
+						}
+						switchToFile(message.filename);
+						break;
+
+					case 'loadFolder':
+						// Clear existing files
+						files.forEach((data, name) => {
+							data.model.dispose();
+						});
+						files.clear();
+
+						// Load all files from folder
+						message.files.forEach(file => {
+							createFile(file.filename, file.content);
+						});
+
+						// Switch to main.py
+						if (files.has('main.py')) {
+							switchToFile('main.py');
+						} else if (files.size > 0) {
+							switchToFile(Array.from(files.keys())[0]);
+						}
+
+						addConsoleOutput(\`Loaded folder: \${message.folderPath}\`, 'system');
+						addConsoleOutput(\`Files loaded: \${message.files.map(f => f.filename).join(', ')}\`, 'system');
+						break;
+
+					case 'fileChangedOnDisk':
+						if (files.has(message.filename)) {
+							const currentContent = files.get(message.filename).model.getValue();
+							if (currentContent !== message.content) {
+								// Auto-reload from disk
+								files.get(message.filename).model.setValue(message.content);
+								addConsoleOutput(\`Reloaded \${message.filename} from disk\`, 'system');
+							}
+						}
+						break;
+
+					case 'fileCreatedOnDisk':
+						if (!files.has(message.filename)) {
+							// Auto-open new file
+							createFile(message.filename, message.content);
+							switchToFile(message.filename);
+							addConsoleOutput(\`Opened new file \${message.filename}\`, 'system');
+						}
+						break;
+
+					case 'fileDeletedOnDisk':
+						if (files.has(message.filename)) {
+							// Auto-close deleted file
+							deleteFile(message.filename);
+							addConsoleOutput(\`Closed deleted file \${message.filename}\`, 'system');
+						}
+						break;
 				}
 			});
 		});
@@ -1300,8 +1461,10 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				closeBtn.innerHTML = '×';
 				closeBtn.addEventListener('click', (e) => {
 					e.stopPropagation();
-					if (files.size > 1 || confirm('Delete the last file?')) {
+					if (files.size > 1) {
 						deleteFile(name);
+					} else {
+						addConsoleOutput('Cannot close the last file', 'error');
 					}
 				});
 
@@ -1327,118 +1490,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			return langMap[ext] || 'plaintext';
 		}
 
-		// Message Handler
-		window.addEventListener('message', event => {
-			const message = event.data;
-
-			switch (message.command) {
-				case 'executionResult':
-					setRunning(false);
-					if (message.output) {
-						addConsoleOutput(message.output, 'stdout');
-					}
-					if (message.errors) {
-						addConsoleOutput(message.errors, 'stderr');
-					}
-					if (message.exitCode === 0) {
-						addConsoleOutput(\`Exited with code \${message.exitCode}\`, 'success');
-					} else {
-						addConsoleOutput(\`Exited with code \${message.exitCode}\`, 'error');
-					}
-					break;
-
-				case 'executionError':
-					setRunning(false);
-					addConsoleOutput(message.error, 'error');
-					break;
-
-				case 'formatted':
-					editor.setValue(message.code);
-					break;
-
-				case 'settingsUpdated':
-					applySettings(message.settings);
-					break;
-
-				case 'interpretersList':
-					const select = document.getElementById('pythonEnvSelect');
-					select.innerHTML = '';
-					message.interpreters.forEach(path => {
-						const option = document.createElement('option');
-						option.value = path;
-						option.textContent = path;
-						if (path === message.selected) {
-							option.selected = true;
-						}
-						select.appendChild(option);
-					});
-					break;
-
-				case 'openFileContent':
-					if (!files.has(message.filename)) {
-						createFile(message.filename, message.content);
-					} else {
-						const data = files.get(message.filename);
-						data.model.setValue(message.content);
-					}
-					switchToFile(message.filename);
-					break;
-
-				case 'loadFolder':
-					// Clear existing files
-					files.forEach((data, name) => {
-						data.model.dispose();
-					});
-					files.clear();
-
-					// Load all files from folder
-					message.files.forEach(file => {
-						createFile(file.filename, file.content);
-					});
-
-					// Switch to main.py
-					if (files.has('main.py')) {
-						switchToFile('main.py');
-					} else if (files.size > 0) {
-						switchToFile(Array.from(files.keys())[0]);
-					}
-
-					addConsoleOutput(\`Loaded folder: \${message.folderPath}\`, 'system');
-					addConsoleOutput(\`Files loaded: \${message.files.map(f => f.filename).join(', ')}\`, 'system');
-					break;
-
-				case 'fileChangedOnDisk':
-					if (files.has(message.filename)) {
-						const currentContent = files.get(message.filename).model.getValue();
-						if (currentContent !== message.content) {
-							const reload = confirm(\`\${message.filename} was changed on disk. Reload?\`);
-							if (reload) {
-								files.get(message.filename).model.setValue(message.content);
-							}
-						}
-					}
-					break;
-
-				case 'fileCreatedOnDisk':
-					if (!files.has(message.filename)) {
-						const add = confirm(\`New file \${message.filename} was created on disk. Open it?\`);
-						if (add) {
-							createFile(message.filename, message.content);
-							switchToFile(message.filename);
-						}
-					}
-					break;
-
-				case 'fileDeletedOnDisk':
-					if (files.has(message.filename)) {
-						const remove = confirm(\`\${message.filename} was deleted on disk. Close tab?\`);
-						if (remove) {
-							deleteFile(message.filename);
-						}
-					}
-					break;
-			}
-		});
 	</script>
 </body>
 </html>`;
