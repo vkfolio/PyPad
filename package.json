@@ -1,7 +1,8 @@
 {
-  "name": "pythonpad",
-  "displayName": "PythonPad",
-  "description": "DartPad-like Python playground with multi-file support",
+  "name": "pypad",
+  "displayName": "PyPAD",
+  "publisher": "vigneshkarnika",
+  "description": "Interactive Python playground with multi-file support, real-time execution, and IntelliSense - inspired by DartPad",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.105.0"
