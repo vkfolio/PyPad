@@ -203,7 +203,8 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 						const result = await executeCode(
 							message.files,
 							message.entryPoint,
-							message.args || ''
+							message.args || '',
+							panel
 						);
 						panel.webview.postMessage({
 							command: 'executionResult',
@@ -216,6 +217,20 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 							command: 'executionError',
 							error: error.message
 						});
+					}
+					break;
+
+				case 'inputResponse':
+					// Handle user input for interactive Python input()
+					if (activeProcess && activeProcess.proc.stdin) {
+						try {
+							activeProcess.proc.stdin.write(message.input + '\n');
+						} catch (error: any) {
+							panel.webview.postMessage({
+								command: 'executionError',
+								error: `Failed to send input: ${error.message}`
+							});
+						}
 					}
 					break;
 
@@ -454,10 +469,14 @@ async function saveFile(filename: string, content: string): Promise<void> {
 	}
 }
 
+// Store active Python process for interactive input
+let activeProcess: { proc: any; panel: vscode.WebviewPanel; tmpDir: string } | null = null;
+
 async function executeCode(
 	files: Record<string, string>,
 	entryPoint: string,
-	argsString: string = ''
+	argsString: string = '',
+	panel: vscode.WebviewPanel
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pythonpad-'));
 
@@ -493,7 +512,7 @@ async function executeCode(
 			}
 		}
 
-		// Execute Python code
+		// Execute Python code with interactive input support
 		return await new Promise((resolve, reject) => {
 			const proc = spawn(pythonPath, ['-u', entryPoint, ...parsedArgs], {
 				cwd: tmpDir,
@@ -503,28 +522,72 @@ async function executeCode(
 				}
 			});
 
+			// Store process for input handling
+			activeProcess = { proc, panel, tmpDir };
+
 			let stdout = '';
 			let stderr = '';
+			let lastOutputTime = Date.now();
+			let pendingOutput = '';
 
+			// Stream stdout in real-time
 			proc.stdout.on('data', (data) => {
-				stdout += data.toString();
+				const text = data.toString();
+				stdout += text;
+				pendingOutput += text;
+				lastOutputTime = Date.now();
+
+				// Send output chunk to webview
+				panel.webview.postMessage({
+					command: 'outputChunk',
+					text: text,
+					type: 'stdout'
+				});
+
+				// Detect input() prompt: output without trailing newline
+				if (!text.endsWith('\n') && !text.endsWith('\r\n')) {
+					setTimeout(() => {
+						const timeSinceOutput = Date.now() - lastOutputTime;
+						// If no new output for 100ms, likely waiting for input
+						if (timeSinceOutput >= 100 && pendingOutput.length > 0) {
+							panel.webview.postMessage({
+								command: 'waitingForInput',
+								prompt: pendingOutput.trim()
+							});
+							pendingOutput = '';
+						}
+					}, 150);
+				} else {
+					pendingOutput = '';
+				}
 			});
 
 			proc.stderr.on('data', (data) => {
-				stderr += data.toString();
+				const text = data.toString();
+				stderr += text;
+
+				// Send error output to webview
+				panel.webview.postMessage({
+					command: 'outputChunk',
+					text: text,
+					type: 'stderr'
+				});
 			});
 
 			proc.on('close', (code) => {
+				activeProcess = null;
 				resolve({ stdout, stderr, exitCode: code || 0 });
 			});
 
 			proc.on('error', (err) => {
+				activeProcess = null;
 				reject(new Error(`Failed to start Python: ${err.message}. Check that Python is installed and pythonpad.pythonPath is configured correctly.`));
 			});
 
 			// Set timeout for long-running processes
 			setTimeout(() => {
 				proc.kill();
+				activeProcess = null;
 				reject(new Error('Execution timeout (30s)'));
 			}, 30000);
 		});
@@ -896,6 +959,55 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			border-radius: 5px;
 		}
 
+		.console-input-container {
+			display: none;
+			padding: 12px;
+			background: #1a1a1a;
+			border-top: 1px solid #3e3e42;
+		}
+
+		.console-input-container.active {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+
+		.console-input-prompt {
+			color: #4ec9b0;
+			font-family: 'Consolas', 'Courier New', monospace;
+			font-size: 13px;
+			white-space: nowrap;
+		}
+
+		.console-input-field {
+			flex: 1;
+			background: #2d2d30;
+			border: 1px solid #3e3e42;
+			color: #d4d4d4;
+			padding: 6px 10px;
+			font-family: 'Consolas', 'Courier New', monospace;
+			font-size: 13px;
+			outline: none;
+		}
+
+		.console-input-field:focus {
+			border-color: #007acc;
+		}
+
+		.console-input-submit {
+			background: #007acc;
+			color: #ffffff;
+			border: none;
+			padding: 6px 16px;
+			cursor: pointer;
+			font-size: 13px;
+			border-radius: 2px;
+		}
+
+		.console-input-submit:hover {
+			background: #005a9e;
+		}
+
 		.output-line {
 			margin-bottom: 2px;
 			white-space: pre-wrap;
@@ -1011,6 +1123,11 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				<button id="saveFileBtn" title="Save current file (Ctrl+S)">💾 Save</button>
 			</div>
 			<div class="console-content" id="consoleOutput"></div>
+			<div class="console-input-container" id="consoleInputContainer">
+				<span class="console-input-prompt" id="consoleInputPrompt"></span>
+				<input type="text" class="console-input-field" id="consoleInputField" placeholder="Enter input..." />
+				<button class="console-input-submit" id="consoleInputSubmit">Submit</button>
+			</div>
 		</div>
 	</div>
 
@@ -1083,6 +1200,179 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			});
 
 			// Layout is handled by CSS flexbox now
+
+			// Register Python IntelliSense
+			monaco.languages.registerCompletionItemProvider('python', {
+				provideCompletionItems: (model, position) => {
+					const suggestions = [];
+
+					// Python keywords
+					const keywords = [
+						'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
+						'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+						'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
+						'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return',
+						'try', 'while', 'with', 'yield'
+					];
+
+					keywords.forEach(keyword => {
+						suggestions.push({
+							label: keyword,
+							kind: monaco.languages.CompletionItemKind.Keyword,
+							insertText: keyword,
+							documentation: \`Python keyword: \${keyword}\`
+						});
+					});
+
+					// Built-in functions
+					const builtins = [
+						{ name: 'print', sig: 'print(*values, sep=" ", end="\\\\n")', doc: 'Print values to stdout' },
+						{ name: 'input', sig: 'input(prompt="")', doc: 'Read a line from input' },
+						{ name: 'len', sig: 'len(obj)', doc: 'Return the length of an object' },
+						{ name: 'range', sig: 'range(start, stop, step=1)', doc: 'Return a sequence of numbers' },
+						{ name: 'str', sig: 'str(object)', doc: 'Convert object to string' },
+						{ name: 'int', sig: 'int(x, base=10)', doc: 'Convert to integer' },
+						{ name: 'float', sig: 'float(x)', doc: 'Convert to floating point' },
+						{ name: 'bool', sig: 'bool(x)', doc: 'Convert to boolean' },
+						{ name: 'list', sig: 'list(iterable)', doc: 'Create a list' },
+						{ name: 'dict', sig: 'dict()', doc: 'Create a dictionary' },
+						{ name: 'set', sig: 'set(iterable)', doc: 'Create a set' },
+						{ name: 'tuple', sig: 'tuple(iterable)', doc: 'Create a tuple' },
+						{ name: 'type', sig: 'type(object)', doc: 'Return the type of an object' },
+						{ name: 'open', sig: 'open(file, mode="r")', doc: 'Open a file' },
+						{ name: 'sum', sig: 'sum(iterable, start=0)', doc: 'Sum of iterable' },
+						{ name: 'max', sig: 'max(iterable)', doc: 'Return maximum value' },
+						{ name: 'min', sig: 'min(iterable)', doc: 'Return minimum value' },
+						{ name: 'abs', sig: 'abs(x)', doc: 'Return absolute value' },
+						{ name: 'round', sig: 'round(number, ndigits=0)', doc: 'Round a number' },
+						{ name: 'sorted', sig: 'sorted(iterable, key=None, reverse=False)', doc: 'Return sorted list' },
+						{ name: 'reversed', sig: 'reversed(sequence)', doc: 'Return reversed iterator' },
+						{ name: 'enumerate', sig: 'enumerate(iterable, start=0)', doc: 'Return enumerate object' },
+						{ name: 'zip', sig: 'zip(*iterables)', doc: 'Zip iterables together' },
+						{ name: 'map', sig: 'map(function, iterable)', doc: 'Apply function to iterable' },
+						{ name: 'filter', sig: 'filter(function, iterable)', doc: 'Filter iterable' },
+						{ name: 'any', sig: 'any(iterable)', doc: 'True if any element is true' },
+						{ name: 'all', sig: 'all(iterable)', doc: 'True if all elements are true' },
+						{ name: 'isinstance', sig: 'isinstance(object, classinfo)', doc: 'Check if object is instance of class' },
+						{ name: 'hasattr', sig: 'hasattr(object, name)', doc: 'Check if object has attribute' },
+						{ name: 'getattr', sig: 'getattr(object, name, default=None)', doc: 'Get attribute value' },
+						{ name: 'setattr', sig: 'setattr(object, name, value)', doc: 'Set attribute value' },
+						{ name: 'dir', sig: 'dir(object)', doc: 'List object attributes' },
+						{ name: 'help', sig: 'help(object)', doc: 'Get help for object' }
+					];
+
+					builtins.forEach(fn => {
+						suggestions.push({
+							label: fn.name,
+							kind: monaco.languages.CompletionItemKind.Function,
+							insertText: \`\${fn.name}(\${1})\`,
+							insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+							documentation: \`\${fn.sig}\\n\\n\${fn.doc}\`,
+							detail: fn.sig
+						});
+					});
+
+					// Common modules
+					const modules = [
+						{ name: 'sys', doc: 'System-specific parameters and functions' },
+						{ name: 'os', doc: 'Operating system interface' },
+						{ name: 'math', doc: 'Mathematical functions' },
+						{ name: 'random', doc: 'Generate pseudo-random numbers' },
+						{ name: 'datetime', doc: 'Date and time types' },
+						{ name: 'json', doc: 'JSON encoder and decoder' },
+						{ name: 're', doc: 'Regular expression operations' },
+						{ name: 'collections', doc: 'Container datatypes' },
+						{ name: 'itertools', doc: 'Iterator functions' },
+						{ name: 'functools', doc: 'Higher-order functions' },
+						{ name: 'pathlib', doc: 'Object-oriented filesystem paths' },
+						{ name: 'time', doc: 'Time access and conversions' }
+					];
+
+					modules.forEach(mod => {
+						suggestions.push({
+							label: mod.name,
+							kind: monaco.languages.CompletionItemKind.Module,
+							insertText: mod.name,
+							documentation: mod.doc
+						});
+					});
+
+					// Code snippets
+					suggestions.push({
+						label: 'if',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'if \${1:condition}:\\n\\t\${2:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'if statement'
+					});
+
+					suggestions.push({
+						label: 'elif',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'elif \${1:condition}:\\n\\t\${2:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'elif statement'
+					});
+
+					suggestions.push({
+						label: 'for',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'for \${1:item} in \${2:iterable}:\\n\\t\${3:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'for loop'
+					});
+
+					suggestions.push({
+						label: 'while',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'while \${1:condition}:\\n\\t\${2:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'while loop'
+					});
+
+					suggestions.push({
+						label: 'def',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'def \${1:function_name}(\${2:params}):\\n\\t\${3:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'function definition'
+					});
+
+					suggestions.push({
+						label: 'class',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'class \${1:ClassName}:\\n\\tdef __init__(self\${2:, params}):\\n\\t\\t\${3:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'class definition'
+					});
+
+					suggestions.push({
+						label: 'try',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'try:\\n\\t\${1:pass}\\nexcept \${2:Exception} as \${3:e}:\\n\\t\${4:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'try-except block'
+					});
+
+					suggestions.push({
+						label: 'with',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'with \${1:expression} as \${2:variable}:\\n\\t\${3:pass}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'with statement'
+					});
+
+					suggestions.push({
+						label: 'main',
+						kind: monaco.languages.CompletionItemKind.Snippet,
+						insertText: 'if __name__ == "__main__":\\n\\t\${1:main()}',
+						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+						documentation: 'main entry point'
+					});
+
+					return { suggestions };
+				}
+			});
 
 			// Load saved state or create default
 			const state = vscode.getState();
@@ -1268,13 +1558,69 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				}
 			});
 
+			// Interactive Input Functions
+			function showInputPrompt(prompt) {
+				const container = document.getElementById('consoleInputContainer');
+				const promptSpan = document.getElementById('consoleInputPrompt');
+				const inputField = document.getElementById('consoleInputField');
+
+				promptSpan.textContent = prompt;
+				container.classList.add('active');
+				inputField.value = '';
+				inputField.focus();
+			}
+
+			function hideInputPrompt() {
+				const container = document.getElementById('consoleInputContainer');
+				container.classList.remove('active');
+			}
+
+			function submitInput() {
+				const inputField = document.getElementById('consoleInputField');
+				const userInput = inputField.value;
+
+				// Echo input to console
+				const promptSpan = document.getElementById('consoleInputPrompt');
+				addConsoleOutput(\`\${promptSpan.textContent}\${userInput}\`, 'stdout');
+
+				// Send input to extension
+				vscode.postMessage({
+					command: 'inputResponse',
+					input: userInput
+				});
+
+				// Hide input field
+				hideInputPrompt();
+			}
+
+			// Input field event listeners
+			document.getElementById('consoleInputSubmit').addEventListener('click', submitInput);
+
+			document.getElementById('consoleInputField').addEventListener('keydown', (e) => {
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					submitInput();
+				}
+			});
+
 			// Message Handler
 			window.addEventListener('message', event => {
 				const message = event.data;
 
 				switch (message.command) {
+					case 'outputChunk':
+						// Real-time output streaming
+						addConsoleOutput(message.text, message.type);
+						break;
+
+					case 'waitingForInput':
+						// Python is waiting for input
+						showInputPrompt(message.prompt);
+						break;
+
 					case 'executionResult':
 						setRunning(false);
+						hideInputPrompt();
 						if (message.output) {
 							addConsoleOutput(message.output, 'stdout');
 						}
@@ -1290,6 +1636,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 					case 'executionError':
 						setRunning(false);
+						hideInputPrompt();
 						addConsoleOutput(message.error, 'error');
 						break;
 

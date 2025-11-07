@@ -25,4 +25,4 @@ print(json_string)
 parsed = json.loads(json_string)
 print("\n=== Parsed Features ===")
 for feature in parsed['features']:
-    print(f"  ✓ {feature}")
+    print(f"  + {feature}")

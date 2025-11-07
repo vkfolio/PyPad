@@ -4,10 +4,10 @@ def divide(a, b):
         print(f"{a} / {b} = {result}")
         return result
     except ZeroDivisionError:
-        print("❌ Error: Cannot divide by zero!")
+        print("[ERROR] Cannot divide by zero!")
         return None
     except TypeError:
-        print("❌ Error: Invalid input types!")
+        print("[ERROR] Invalid input types!")
         return None
 
 print("=== Testing Error Handling ===")

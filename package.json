@@ -10,6 +10,9 @@
     "Programming Languages",
     "Other"
   ],
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -104,6 +107,9 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "string-argv": "^0.3.2"
+    "monaco-languageclient": "^10.2.0",
+    "string-argv": "^0.3.2",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver-protocol": "^3.17.5"
   }
 }
