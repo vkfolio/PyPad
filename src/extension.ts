@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { PythonLSPBridge } from './lspBridge';
+import { PythonLSPBridge, registerVirtualDocumentProvider } from './lspBridge';
 const stringArgvModule = require('string-argv');
 const stringArgv = stringArgvModule.default || stringArgvModule;
 
@@ -13,6 +13,9 @@ let lspBridge: PythonLSPBridge | undefined = undefined;
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('PythonPad extension is now active!');
+
+	// Register virtual document provider for full Pylance IntelliSense
+	registerVirtualDocumentProvider(context);
 
 	// Register main command
 	const openCmd = vscode.commands.registerCommand('pythonpad.open', () => {
@@ -246,12 +249,9 @@ function setupMessageHandlers(panel: vscode.WebviewPanel, context: vscode.Extens
 					break;
 
 				case 'initLSP':
-					// Initialize LSP bridge with file content
+					// Initialize LSP bridge with virtual document
 					if (lspBridge && message.filename && message.content) {
-						const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pythonpad-lsp-'));
-						const filePath = path.join(tmpDir, message.filename);
-						await fs.writeFile(filePath, message.content);
-						await lspBridge.initialize(filePath, message.content);
+						await lspBridge.initialize(message.filename, message.content);
 					}
 					break;
 
@@ -1233,75 +1233,13 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			// Layout is handled by CSS flexbox now
 
-			// Register Python IntelliSense with LSP
+			// Register Python IntelliSense with LSP (all completions handled by Pylance)
 			let lspRequestId = 0;
 			const lspCompletionCache = new Map();
 
 			monaco.languages.registerCompletionItemProvider('python', {
 				provideCompletionItems: async (model, position) => {
-					// Get the text before the cursor
-					const textUntilPosition = model.getValueInRange({
-						startLineNumber: position.lineNumber,
-						startColumn: 1,
-						endLineNumber: position.lineNumber,
-						endColumn: position.column
-					});
-
-					// Check for "import X" or "from X" pattern (but NOT "from X import")
-					const isImportLine = /^\s*(import|from)\s+\w*$/.test(textUntilPosition);
-					const isFromImportLine = /^\s*from\s+[\w.]+\s+import\s*$/.test(textUntilPosition);
-
-					if (isImportLine && !isFromImportLine) {
-						const commonModules = [
-							'collections', 'datetime', 'typing', 'itertools', 'functools', 'os', 'sys', 're',
-							'json', 'pathlib', 'math', 'random', 'time', 'copy', 'pickle', 'csv', 'sqlite3',
-							'threading', 'multiprocessing', 'asyncio', 'socket', 'http', 'urllib', 'email',
-							'io', 'argparse', 'logging', 'unittest', 'pytest', 'subprocess', 'shutil',
-							'tempfile', 'glob', 'fnmatch', 'base64', 'hashlib', 'hmac', 'secrets',
-							'uuid', 'enum', 'dataclasses', 'abc', 'contextlib', 'inspect', 'warnings'
-						];
-						const suggestions = commonModules.map(mod => ({
-							label: mod,
-							kind: monaco.languages.CompletionItemKind.Module,
-							insertText: mod,
-							documentation: \`Python standard library module: \${mod}\`,
-							sortText: '0' + mod
-						}));
-						return { suggestions };
-					}
-
-					// Check for "from X import Y" pattern and provide static member suggestions
-					const fromImportMatch = textUntilPosition.match(/^\s*from\s+([\w.]+)\s+import\s+(\w*)$/);
-					if (fromImportMatch) {
-						const moduleName = fromImportMatch[1];
-						const moduleMembers = {
-							'collections': ['Counter', 'defaultdict', 'deque', 'namedtuple', 'OrderedDict', 'ChainMap', 'UserDict', 'UserList', 'UserString'],
-							'datetime': ['datetime', 'date', 'time', 'timedelta', 'timezone', 'tzinfo', 'MINYEAR', 'MAXYEAR'],
-							'typing': ['List', 'Dict', 'Tuple', 'Set', 'Optional', 'Union', 'Any', 'Callable', 'Type', 'TypeVar', 'Generic', 'Protocol', 'Literal', 'Final'],
-							'itertools': ['count', 'cycle', 'repeat', 'chain', 'compress', 'dropwhile', 'groupby', 'islice', 'product', 'permutations', 'combinations'],
-							'functools': ['reduce', 'partial', 'wraps', 'lru_cache', 'cache', 'cached_property', 'singledispatch', 'total_ordering'],
-							'os': ['path', 'environ', 'getcwd', 'chdir', 'listdir', 'mkdir', 'makedirs', 'remove', 'rename', 'walk', 'system'],
-							'sys': ['argv', 'exit', 'path', 'platform', 'version', 'stdout', 'stderr', 'stdin'],
-							're': ['compile', 'match', 'search', 'findall', 'finditer', 'sub', 'split', 'escape'],
-							'json': ['dumps', 'dump', 'loads', 'load', 'JSONEncoder', 'JSONDecoder'],
-							'pathlib': ['Path', 'PurePath', 'PosixPath', 'WindowsPath'],
-							'math': ['pi', 'e', 'sqrt', 'pow', 'sin', 'cos', 'tan', 'ceil', 'floor', 'log'],
-							'random': ['random', 'randint', 'choice', 'shuffle', 'sample', 'uniform', 'seed']
-						};
-
-						if (moduleMembers[moduleName]) {
-							const suggestions = moduleMembers[moduleName].map(member => ({
-								label: member,
-								kind: monaco.languages.CompletionItemKind.Function,
-								insertText: member,
-								documentation: \`from \${moduleName} import \${member}\`,
-								sortText: '0' + member
-							}));
-							return { suggestions };
-						}
-					}
-
-					// Request completions from extension via LSP bridge
+					// Request completions from extension via LSP bridge (Pylance)
 					const requestId = ++lspRequestId;
 
 					// Send content update to LSP
@@ -1310,11 +1248,11 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 						content: model.getValue()
 					});
 
-					// Request completions
+					// Request completions from Pylance
 					return new Promise((resolve) => {
 						const timeout = setTimeout(() => {
 							resolve({ suggestions: [] });
-						}, 1000);
+						}, 2000); // Increased timeout for Pylance
 
 						// Store callback
 						lspCompletionCache.set(requestId, (completions) => {
@@ -1322,7 +1260,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 							const suggestions = completions.map(item => ({
 								label: item.label,
 								kind: item.kind,
-								insertText: item.insertText,
+								insertText: item.insertText || item.label,
 								documentation: item.documentation,
 								detail: item.detail,
 								sortText: item.sortText,
@@ -1339,7 +1277,8 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 							character: position.column - 1
 						});
 					});
-				}
+				},
+				triggerCharacters: ['.', ' ', ...Array.from('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')]
 			});
 
 
@@ -1600,12 +1539,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 					case 'executionResult':
 						setRunning(false);
 						hideInputPrompt();
-						if (message.output) {
-							addConsoleOutput(message.output, 'stdout');
-						}
-						if (message.errors) {
-							addConsoleOutput(message.errors, 'stderr');
-						}
+						// Note: output already streamed via outputChunk messages, so don't add it again
 						if (message.exitCode === 0) {
 							addConsoleOutput(\`Exited with code \${message.exitCode}\`, 'success');
 						} else {

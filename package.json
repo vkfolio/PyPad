@@ -2,8 +2,12 @@
   "name": "pypad",
   "displayName": "PyPAD",
   "publisher": "vigneshkarnika",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vkfolio/PyPad"
+  },
   "description": "Interactive Python playground with multi-file support, real-time execution, and IntelliSense - inspired by DartPad",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.105.0"
   },
