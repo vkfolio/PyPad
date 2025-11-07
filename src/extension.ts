@@ -1239,6 +1239,68 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			monaco.languages.registerCompletionItemProvider('python', {
 				provideCompletionItems: async (model, position) => {
+					// Get the text before the cursor
+					const textUntilPosition = model.getValueInRange({
+						startLineNumber: position.lineNumber,
+						startColumn: 1,
+						endLineNumber: position.lineNumber,
+						endColumn: position.column
+					});
+
+					// Check for "import X" or "from X" pattern (but NOT "from X import")
+					const isImportLine = /^\s*(import|from)\s+\w*$/.test(textUntilPosition);
+					const isFromImportLine = /^\s*from\s+[\w.]+\s+import\s*$/.test(textUntilPosition);
+
+					if (isImportLine && !isFromImportLine) {
+						const commonModules = [
+							'collections', 'datetime', 'typing', 'itertools', 'functools', 'os', 'sys', 're',
+							'json', 'pathlib', 'math', 'random', 'time', 'copy', 'pickle', 'csv', 'sqlite3',
+							'threading', 'multiprocessing', 'asyncio', 'socket', 'http', 'urllib', 'email',
+							'io', 'argparse', 'logging', 'unittest', 'pytest', 'subprocess', 'shutil',
+							'tempfile', 'glob', 'fnmatch', 'base64', 'hashlib', 'hmac', 'secrets',
+							'uuid', 'enum', 'dataclasses', 'abc', 'contextlib', 'inspect', 'warnings'
+						];
+						const suggestions = commonModules.map(mod => ({
+							label: mod,
+							kind: monaco.languages.CompletionItemKind.Module,
+							insertText: mod,
+							documentation: \`Python standard library module: \${mod}\`,
+							sortText: '0' + mod
+						}));
+						return { suggestions };
+					}
+
+					// Check for "from X import Y" pattern and provide static member suggestions
+					const fromImportMatch = textUntilPosition.match(/^\s*from\s+([\w.]+)\s+import\s+(\w*)$/);
+					if (fromImportMatch) {
+						const moduleName = fromImportMatch[1];
+						const moduleMembers = {
+							'collections': ['Counter', 'defaultdict', 'deque', 'namedtuple', 'OrderedDict', 'ChainMap', 'UserDict', 'UserList', 'UserString'],
+							'datetime': ['datetime', 'date', 'time', 'timedelta', 'timezone', 'tzinfo', 'MINYEAR', 'MAXYEAR'],
+							'typing': ['List', 'Dict', 'Tuple', 'Set', 'Optional', 'Union', 'Any', 'Callable', 'Type', 'TypeVar', 'Generic', 'Protocol', 'Literal', 'Final'],
+							'itertools': ['count', 'cycle', 'repeat', 'chain', 'compress', 'dropwhile', 'groupby', 'islice', 'product', 'permutations', 'combinations'],
+							'functools': ['reduce', 'partial', 'wraps', 'lru_cache', 'cache', 'cached_property', 'singledispatch', 'total_ordering'],
+							'os': ['path', 'environ', 'getcwd', 'chdir', 'listdir', 'mkdir', 'makedirs', 'remove', 'rename', 'walk', 'system'],
+							'sys': ['argv', 'exit', 'path', 'platform', 'version', 'stdout', 'stderr', 'stdin'],
+							're': ['compile', 'match', 'search', 'findall', 'finditer', 'sub', 'split', 'escape'],
+							'json': ['dumps', 'dump', 'loads', 'load', 'JSONEncoder', 'JSONDecoder'],
+							'pathlib': ['Path', 'PurePath', 'PosixPath', 'WindowsPath'],
+							'math': ['pi', 'e', 'sqrt', 'pow', 'sin', 'cos', 'tan', 'ceil', 'floor', 'log'],
+							'random': ['random', 'randint', 'choice', 'shuffle', 'sample', 'uniform', 'seed']
+						};
+
+						if (moduleMembers[moduleName]) {
+							const suggestions = moduleMembers[moduleName].map(member => ({
+								label: member,
+								kind: monaco.languages.CompletionItemKind.Function,
+								insertText: member,
+								documentation: \`from \${moduleName} import \${member}\`,
+								sortText: '0' + member
+							}));
+							return { suggestions };
+						}
+					}
+
 					// Request completions from extension via LSP bridge
 					const requestId = ++lspRequestId;
 
@@ -1277,292 +1339,9 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 							character: position.column - 1
 						});
 					});
-
-					// Fallback to static suggestions if LSP fails
-					const suggestions = [];
-
-					// Get the text before the cursor to detect dot notation
-					const textUntilPosition = model.getValueInRange({
-						startLineNumber: position.lineNumber,
-						startColumn: 1,
-						endLineNumber: position.lineNumber,
-						endColumn: position.column
-					});
-
-					// Check if we're completing after a dot (e.g., "datetime.")
-					const dotMatch = textUntilPosition.match(/(\w+)\.(\w*)$/);
-					if (dotMatch) {
-						const moduleName = dotMatch[1];
-
-						// Module attribute completions
-						const moduleAttrs = {
-							'datetime': [
-								{ name: 'datetime', sig: 'datetime(year, month, day, ...)', doc: 'Date and time class' },
-								{ name: 'date', sig: 'date(year, month, day)', doc: 'Date class' },
-								{ name: 'time', sig: 'time(hour=0, minute=0, second=0)', doc: 'Time class' },
-								{ name: 'timedelta', sig: 'timedelta(days=0, seconds=0, ...)', doc: 'Duration class' },
-								{ name: 'now', sig: 'datetime.now()', doc: 'Current datetime' },
-								{ name: 'today', sig: 'datetime.today()', doc: 'Current date' },
-								{ name: 'utcnow', sig: 'datetime.utcnow()', doc: 'Current UTC datetime' },
-								{ name: 'strptime', sig: 'strptime(date_string, format)', doc: 'Parse string to datetime' },
-								{ name: 'strftime', sig: 'strftime(format)', doc: 'Format datetime to string' },
-								{ name: 'timezone', sig: 'timezone(offset)', doc: 'Timezone class' }
-							],
-							'os': [
-								{ name: 'getcwd', sig: 'os.getcwd()', doc: 'Get current working directory' },
-								{ name: 'chdir', sig: 'os.chdir(path)', doc: 'Change directory' },
-								{ name: 'listdir', sig: 'os.listdir(path)', doc: 'List directory contents' },
-								{ name: 'mkdir', sig: 'os.mkdir(path)', doc: 'Create directory' },
-								{ name: 'makedirs', sig: 'os.makedirs(path)', doc: 'Create directories recursively' },
-								{ name: 'remove', sig: 'os.remove(path)', doc: 'Remove file' },
-								{ name: 'rename', sig: 'os.rename(src, dst)', doc: 'Rename file or directory' },
-								{ name: 'path', sig: 'os.path', doc: 'Path manipulation module' },
-								{ name: 'environ', sig: 'os.environ', doc: 'Environment variables dict' },
-								{ name: 'system', sig: 'os.system(command)', doc: 'Execute system command' }
-							],
-							'sys': [
-								{ name: 'argv', sig: 'sys.argv', doc: 'Command line arguments list' },
-								{ name: 'exit', sig: 'sys.exit(code=0)', doc: 'Exit the program' },
-								{ name: 'path', sig: 'sys.path', doc: 'Module search path list' },
-								{ name: 'version', sig: 'sys.version', doc: 'Python version string' },
-								{ name: 'platform', sig: 'sys.platform', doc: 'Platform identifier' },
-								{ name: 'stdin', sig: 'sys.stdin', doc: 'Standard input stream' },
-								{ name: 'stdout', sig: 'sys.stdout', doc: 'Standard output stream' },
-								{ name: 'stderr', sig: 'sys.stderr', doc: 'Standard error stream' }
-							],
-							'math': [
-								{ name: 'pi', sig: 'math.pi', doc: 'Pi constant (3.14159...)' },
-								{ name: 'e', sig: 'math.e', doc: 'Euler\'s number (2.71828...)' },
-								{ name: 'sqrt', sig: 'math.sqrt(x)', doc: 'Square root' },
-								{ name: 'pow', sig: 'math.pow(x, y)', doc: 'x raised to power y' },
-								{ name: 'floor', sig: 'math.floor(x)', doc: 'Round down to integer' },
-								{ name: 'ceil', sig: 'math.ceil(x)', doc: 'Round up to integer' },
-								{ name: 'sin', sig: 'math.sin(x)', doc: 'Sine of x (in radians)' },
-								{ name: 'cos', sig: 'math.cos(x)', doc: 'Cosine of x (in radians)' },
-								{ name: 'tan', sig: 'math.tan(x)', doc: 'Tangent of x (in radians)' },
-								{ name: 'log', sig: 'math.log(x, base=e)', doc: 'Logarithm' },
-								{ name: 'log10', sig: 'math.log10(x)', doc: 'Base-10 logarithm' },
-								{ name: 'degrees', sig: 'math.degrees(x)', doc: 'Convert radians to degrees' },
-								{ name: 'radians', sig: 'math.radians(x)', doc: 'Convert degrees to radians' }
-							],
-							'random': [
-								{ name: 'random', sig: 'random.random()', doc: 'Random float [0.0, 1.0)' },
-								{ name: 'randint', sig: 'random.randint(a, b)', doc: 'Random integer [a, b]' },
-								{ name: 'choice', sig: 'random.choice(seq)', doc: 'Random element from sequence' },
-								{ name: 'shuffle', sig: 'random.shuffle(seq)', doc: 'Shuffle sequence in place' },
-								{ name: 'sample', sig: 'random.sample(population, k)', doc: 'k random unique elements' },
-								{ name: 'uniform', sig: 'random.uniform(a, b)', doc: 'Random float [a, b]' },
-								{ name: 'seed', sig: 'random.seed(a=None)', doc: 'Initialize random number generator' }
-							],
-							'json': [
-								{ name: 'dumps', sig: 'json.dumps(obj)', doc: 'Serialize obj to JSON string' },
-								{ name: 'loads', sig: 'json.loads(s)', doc: 'Deserialize JSON string' },
-								{ name: 'dump', sig: 'json.dump(obj, fp)', doc: 'Serialize obj to file' },
-								{ name: 'load', sig: 'json.load(fp)', doc: 'Deserialize from file' }
-							],
-							'time': [
-								{ name: 'time', sig: 'time.time()', doc: 'Current time in seconds since epoch' },
-								{ name: 'sleep', sig: 'time.sleep(seconds)', doc: 'Pause execution' },
-								{ name: 'strftime', sig: 'time.strftime(format, t)', doc: 'Format time to string' },
-								{ name: 'strptime', sig: 'time.strptime(string, format)', doc: 'Parse string to time' },
-								{ name: 'localtime', sig: 'time.localtime(secs)', doc: 'Convert seconds to local time' },
-								{ name: 'gmtime', sig: 'time.gmtime(secs)', doc: 'Convert seconds to UTC time' }
-							],
-							're': [
-								{ name: 'match', sig: 're.match(pattern, string)', doc: 'Match pattern at start of string' },
-								{ name: 'search', sig: 're.search(pattern, string)', doc: 'Search for pattern in string' },
-								{ name: 'findall', sig: 're.findall(pattern, string)', doc: 'Find all matches' },
-								{ name: 'finditer', sig: 're.finditer(pattern, string)', doc: 'Iterator over matches' },
-								{ name: 'sub', sig: 're.sub(pattern, repl, string)', doc: 'Replace matches' },
-								{ name: 'split', sig: 're.split(pattern, string)', doc: 'Split by pattern' },
-								{ name: 'compile', sig: 're.compile(pattern)', doc: 'Compile regex pattern' }
-							]
-						};
-
-						if (moduleAttrs[moduleName]) {
-							moduleAttrs[moduleName].forEach(attr => {
-								suggestions.push({
-									label: attr.name,
-									kind: attr.name === attr.name.toUpperCase() || !attr.sig.includes('(')
-										? monaco.languages.CompletionItemKind.Property
-										: monaco.languages.CompletionItemKind.Method,
-									insertText: attr.sig.includes('()') ? \`\${attr.name}()\` : attr.name,
-									documentation: \`\${attr.sig}\\n\\n\${attr.doc}\`,
-									detail: attr.sig
-								});
-							});
-						}
-
-						return { suggestions };
-					}
-
-					// Python keywords
-					const keywords = [
-						'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
-						'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
-						'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
-						'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return',
-						'try', 'while', 'with', 'yield'
-					];
-
-					keywords.forEach(keyword => {
-						suggestions.push({
-							label: keyword,
-							kind: monaco.languages.CompletionItemKind.Keyword,
-							insertText: keyword,
-							documentation: \`Python keyword: \${keyword}\`
-						});
-					});
-
-					// Built-in functions
-					const builtins = [
-						{ name: 'print', sig: 'print(*values, sep=" ", end="\\\\n")', doc: 'Print values to stdout' },
-						{ name: 'input', sig: 'input(prompt="")', doc: 'Read a line from input' },
-						{ name: 'len', sig: 'len(obj)', doc: 'Return the length of an object' },
-						{ name: 'range', sig: 'range(start, stop, step=1)', doc: 'Return a sequence of numbers' },
-						{ name: 'str', sig: 'str(object)', doc: 'Convert object to string' },
-						{ name: 'int', sig: 'int(x, base=10)', doc: 'Convert to integer' },
-						{ name: 'float', sig: 'float(x)', doc: 'Convert to floating point' },
-						{ name: 'bool', sig: 'bool(x)', doc: 'Convert to boolean' },
-						{ name: 'list', sig: 'list(iterable)', doc: 'Create a list' },
-						{ name: 'dict', sig: 'dict()', doc: 'Create a dictionary' },
-						{ name: 'set', sig: 'set(iterable)', doc: 'Create a set' },
-						{ name: 'tuple', sig: 'tuple(iterable)', doc: 'Create a tuple' },
-						{ name: 'type', sig: 'type(object)', doc: 'Return the type of an object' },
-						{ name: 'open', sig: 'open(file, mode="r")', doc: 'Open a file' },
-						{ name: 'sum', sig: 'sum(iterable, start=0)', doc: 'Sum of iterable' },
-						{ name: 'max', sig: 'max(iterable)', doc: 'Return maximum value' },
-						{ name: 'min', sig: 'min(iterable)', doc: 'Return minimum value' },
-						{ name: 'abs', sig: 'abs(x)', doc: 'Return absolute value' },
-						{ name: 'round', sig: 'round(number, ndigits=0)', doc: 'Round a number' },
-						{ name: 'sorted', sig: 'sorted(iterable, key=None, reverse=False)', doc: 'Return sorted list' },
-						{ name: 'reversed', sig: 'reversed(sequence)', doc: 'Return reversed iterator' },
-						{ name: 'enumerate', sig: 'enumerate(iterable, start=0)', doc: 'Return enumerate object' },
-						{ name: 'zip', sig: 'zip(*iterables)', doc: 'Zip iterables together' },
-						{ name: 'map', sig: 'map(function, iterable)', doc: 'Apply function to iterable' },
-						{ name: 'filter', sig: 'filter(function, iterable)', doc: 'Filter iterable' },
-						{ name: 'any', sig: 'any(iterable)', doc: 'True if any element is true' },
-						{ name: 'all', sig: 'all(iterable)', doc: 'True if all elements are true' },
-						{ name: 'isinstance', sig: 'isinstance(object, classinfo)', doc: 'Check if object is instance of class' },
-						{ name: 'hasattr', sig: 'hasattr(object, name)', doc: 'Check if object has attribute' },
-						{ name: 'getattr', sig: 'getattr(object, name, default=None)', doc: 'Get attribute value' },
-						{ name: 'setattr', sig: 'setattr(object, name, value)', doc: 'Set attribute value' },
-						{ name: 'dir', sig: 'dir(object)', doc: 'List object attributes' },
-						{ name: 'help', sig: 'help(object)', doc: 'Get help for object' }
-					];
-
-					builtins.forEach(fn => {
-						suggestions.push({
-							label: fn.name,
-							kind: monaco.languages.CompletionItemKind.Function,
-							insertText: \`\${fn.name}(\${1})\`,
-							insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-							documentation: \`\${fn.sig}\\n\\n\${fn.doc}\`,
-							detail: fn.sig
-						});
-					});
-
-					// Common modules
-					const modules = [
-						{ name: 'sys', doc: 'System-specific parameters and functions' },
-						{ name: 'os', doc: 'Operating system interface' },
-						{ name: 'math', doc: 'Mathematical functions' },
-						{ name: 'random', doc: 'Generate pseudo-random numbers' },
-						{ name: 'datetime', doc: 'Date and time types' },
-						{ name: 'json', doc: 'JSON encoder and decoder' },
-						{ name: 're', doc: 'Regular expression operations' },
-						{ name: 'collections', doc: 'Container datatypes' },
-						{ name: 'itertools', doc: 'Iterator functions' },
-						{ name: 'functools', doc: 'Higher-order functions' },
-						{ name: 'pathlib', doc: 'Object-oriented filesystem paths' },
-						{ name: 'time', doc: 'Time access and conversions' }
-					];
-
-					modules.forEach(mod => {
-						suggestions.push({
-							label: mod.name,
-							kind: monaco.languages.CompletionItemKind.Module,
-							insertText: mod.name,
-							documentation: mod.doc
-						});
-					});
-
-					// Code snippets
-					suggestions.push({
-						label: 'if',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'if \${1:condition}:\\n\\t\${2:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'if statement'
-					});
-
-					suggestions.push({
-						label: 'elif',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'elif \${1:condition}:\\n\\t\${2:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'elif statement'
-					});
-
-					suggestions.push({
-						label: 'for',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'for \${1:item} in \${2:iterable}:\\n\\t\${3:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'for loop'
-					});
-
-					suggestions.push({
-						label: 'while',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'while \${1:condition}:\\n\\t\${2:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'while loop'
-					});
-
-					suggestions.push({
-						label: 'def',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'def \${1:function_name}(\${2:params}):\\n\\t\${3:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'function definition'
-					});
-
-					suggestions.push({
-						label: 'class',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'class \${1:ClassName}:\\n\\tdef __init__(self\${2:, params}):\\n\\t\\t\${3:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'class definition'
-					});
-
-					suggestions.push({
-						label: 'try',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'try:\\n\\t\${1:pass}\\nexcept \${2:Exception} as \${3:e}:\\n\\t\${4:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'try-except block'
-					});
-
-					suggestions.push({
-						label: 'with',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'with \${1:expression} as \${2:variable}:\\n\\t\${3:pass}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'with statement'
-					});
-
-					suggestions.push({
-						label: 'main',
-						kind: monaco.languages.CompletionItemKind.Snippet,
-						insertText: 'if __name__ == "__main__":\\n\\t\${1:main()}',
-						insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-						documentation: 'main entry point'
-					});
-
-					return { suggestions };
 				}
 			});
+
 
 			// Load saved state or create default
 			const state = vscode.getState();

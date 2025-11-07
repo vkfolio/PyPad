@@ -42,18 +42,23 @@ export class PythonLSPBridge {
 	 * Update document content
 	 */
 	async updateContent(content: string): Promise<void> {
-		if (!this.textDocument || !this.documentUri) {
+		if (!this.documentUri) {
 			return;
 		}
 
-		// Apply edit to the document
-		const edit = new vscode.WorkspaceEdit();
-		const fullRange = new vscode.Range(
-			this.textDocument.positionAt(0),
-			this.textDocument.positionAt(this.textDocument.getText().length)
-		);
-		edit.replace(this.documentUri, fullRange, content);
-		await vscode.workspace.applyEdit(edit);
+		try {
+			// Write directly to the file to avoid edit conflicts
+			await vscode.workspace.fs.writeFile(
+				this.documentUri,
+				Buffer.from(content, 'utf8')
+			);
+
+			// Re-open the document to refresh it
+			this.textDocument = await vscode.workspace.openTextDocument(this.documentUri);
+		} catch (error) {
+			// Silently ignore errors - they're just sync issues
+			console.warn('LSP content update warning:', error);
+		}
 	}
 
 	/**
