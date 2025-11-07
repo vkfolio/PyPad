@@ -96,6 +96,27 @@ function createWebviewPanel(context: vscode.ExtensionContext): vscode.WebviewPan
 	setupMessageHandlers(panel, context);
 	setupFileWatcher(panel);
 
+	// Send initial theme to webview
+	const sendThemeToWebview = () => {
+		const theme = vscode.window.activeColorTheme;
+		const themeKind = theme.kind === vscode.ColorThemeKind.Light ? 'light' :
+		                  theme.kind === vscode.ColorThemeKind.HighContrast ? 'high-contrast' : 'dark';
+		panel.webview.postMessage({
+			command: 'themeChanged',
+			themeKind: themeKind
+		});
+	};
+
+	// Send theme immediately
+	sendThemeToWebview();
+
+	// Listen for theme changes and update webview
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveColorTheme(() => {
+			sendThemeToWebview();
+		})
+	);
+
 	// Start Python LSP server for IntelliSense
 	const config = vscode.workspace.getConfiguration('pythonpad');
 	const enableIntelliSense = config.get<boolean>('enableIntelliSense', true);
@@ -704,13 +725,15 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		body {
-			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+			font-size: var(--vscode-font-size, 13px);
 			height: 100vh;
 			display: flex;
 			flex-direction: column;
-			background: #1e1e1e;
-			color: #d4d4d4;
+			background: var(--vscode-editor-background, #1e1e1e);
+			color: var(--vscode-editor-foreground, #d4d4d4);
 			overflow: hidden;
+			transition: background-color 0.2s ease, color 0.2s ease;
 		}
 
 		.toolbar {
@@ -718,33 +741,40 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			align-items: center;
 			gap: 8px;
 			padding: 8px 12px;
-			background: #2d2d30;
-			border-bottom: 1px solid #3e3e42;
+			background: var(--vscode-sideBar-background, #252526);
+			border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
 			flex-shrink: 0;
 			flex-wrap: wrap;
+			transition: background-color 0.2s ease;
 		}
 
 		.toolbar button {
 			padding: 6px 12px;
-			background: #0e639c;
-			color: white;
+			background: var(--vscode-button-background, #0e639c);
+			color: var(--vscode-button-foreground, #ffffff);
 			border: none;
 			border-radius: 2px;
 			cursor: pointer;
 			font-size: 13px;
 			font-weight: 500;
+			transition: background-color 0.15s ease;
 		}
 
 		.toolbar button:hover {
-			background: #1177bb;
+			background: var(--vscode-button-hoverBackground, #1177bb);
+		}
+
+		.toolbar button:focus {
+			outline: 1px solid var(--vscode-focusBorder, #007acc);
+			outline-offset: 2px;
 		}
 
 		.toolbar button.run {
-			background: #16825d;
+			background: var(--vscode-button-secondaryBackground, #16825d);
 		}
 
 		.toolbar button.run:hover {
-			background: #1a9870;
+			background: var(--vscode-button-secondaryHoverBackground, #1a9870);
 		}
 
 		.toolbar button:disabled {
@@ -761,16 +791,24 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			display: flex;
 			align-items: center;
 			gap: 6px;
+			color: var(--vscode-foreground, #d4d4d4);
 		}
 
 		.toolbar input[type="text"],
 		.toolbar select {
-			background: #3c3c3c;
-			color: #d4d4d4;
-			border: 1px solid #3e3e42;
+			background: var(--vscode-input-background, #3c3c3c);
+			color: var(--vscode-input-foreground, #d4d4d4);
+			border: 1px solid var(--vscode-input-border, #3e3e42);
 			padding: 4px 8px;
 			border-radius: 2px;
 			font-size: 12px;
+			transition: border-color 0.15s ease;
+		}
+
+		.toolbar input[type="text"]:focus,
+		.toolbar select:focus {
+			outline: none;
+			border-color: var(--vscode-focusBorder, #007acc);
 		}
 
 		.toolbar input[type="text"] {
@@ -782,8 +820,9 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.settings-button {
-			background: #3c3c3c !important;
+			background: var(--vscode-input-background, #3c3c3c) !important;
 			padding: 6px 10px !important;
+			transition: background-color 0.15s ease;
 		}
 
 		.settings-menu {
@@ -792,13 +831,14 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			top: 100%;
 			right: 0;
 			margin-top: 4px;
-			background: #252526;
-			border: 1px solid #3e3e42;
+			background: var(--vscode-menu-background, #252526);
+			border: 1px solid var(--vscode-menu-border, #3e3e42);
 			border-radius: 4px;
 			min-width: 250px;
 			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 			z-index: 1000;
 			padding: 8px 0;
+			transition: background-color 0.2s ease;
 		}
 
 		.settings-menu.show {
@@ -811,10 +851,12 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			justify-content: space-between;
 			align-items: center;
 			font-size: 13px;
+			color: var(--vscode-foreground, #d4d4d4);
+			transition: background-color 0.15s ease;
 		}
 
 		.settings-item:hover {
-			background: #2a2d2e;
+			background: var(--vscode-list-hoverBackground, #2a2d2e);
 		}
 
 		.settings-item label {
@@ -825,12 +867,18 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.settings-item select {
-			background: #3c3c3c;
-			color: #d4d4d4;
-			border: 1px solid #3e3e42;
+			background: var(--vscode-dropdown-background, #3c3c3c);
+			color: var(--vscode-dropdown-foreground, #d4d4d4);
+			border: 1px solid var(--vscode-dropdown-border, #3e3e42);
 			padding: 4px 8px;
 			border-radius: 2px;
 			font-size: 12px;
+			transition: border-color 0.15s ease;
+		}
+
+		.settings-item select:focus {
+			outline: none;
+			border-color: var(--vscode-focusBorder, #007acc);
 		}
 
 		.settings-item input[type="checkbox"] {
@@ -840,9 +888,10 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		.tabs-bar {
 			display: flex;
 			align-items: center;
-			background: #2d2d30;
-			border-bottom: 1px solid #3e3e42;
+			background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d30);
+			border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, #3e3e42);
 			flex-shrink: 0;
+			transition: background-color 0.2s ease;
 		}
 
 		.tabs-container {
@@ -856,7 +905,11 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.tabs-container::-webkit-scrollbar-thumb {
-			background: #424242;
+			background: var(--vscode-scrollbarSlider-background, #424242);
+		}
+
+		.tabs-container::-webkit-scrollbar-thumb:hover {
+			background: var(--vscode-scrollbarSlider-hoverBackground, #4f4f4f);
 		}
 
 		.tab {
@@ -864,27 +917,30 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			align-items: center;
 			gap: 8px;
 			padding: 8px 12px;
-			background: #2d2d30;
-			border-right: 1px solid #3e3e42;
+			background: var(--vscode-tab-inactiveBackground, #2d2d30);
+			border-right: 1px solid var(--vscode-tab-border, #3e3e42);
 			cursor: pointer;
 			white-space: nowrap;
 			font-size: 13px;
-			transition: background 0.1s;
+			color: var(--vscode-tab-inactiveForeground, #d4d4d4);
+			transition: background-color 0.15s ease, color 0.15s ease;
 		}
 
 		.tab:hover {
-			background: #37373d;
+			background: var(--vscode-tab-hoverBackground, #37373d);
+			color: var(--vscode-tab-hoverForeground, #d4d4d4);
 		}
 
 		.tab.active {
-			background: #1e1e1e;
-			border-bottom: 2px solid #007acc;
+			background: var(--vscode-tab-activeBackground, #1e1e1e);
+			color: var(--vscode-tab-activeForeground, #ffffff);
+			border-bottom: 2px solid var(--vscode-tab-activeBorder, #007acc);
 		}
 
 		.tab-close {
 			background: none;
 			border: none;
-			color: #858585;
+			color: var(--vscode-icon-foreground, #858585);
 			cursor: pointer;
 			padding: 0;
 			font-size: 16px;
@@ -894,27 +950,29 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			display: flex;
 			align-items: center;
 			justify-content: center;
+			transition: background-color 0.15s ease, color 0.15s ease;
 		}
 
 		.tab-close:hover {
-			background: #3e3e42;
+			background: var(--vscode-toolbar-hoverBackground, #3e3e42);
 			border-radius: 2px;
-			color: #d4d4d4;
+			color: var(--vscode-foreground, #d4d4d4);
 		}
 
 		.add-tab-btn {
 			padding: 8px 12px;
 			background: none;
 			border: none;
-			color: #858585;
+			color: var(--vscode-icon-foreground, #858585);
 			cursor: pointer;
 			font-size: 18px;
 			line-height: 1;
+			transition: background-color 0.15s ease, color 0.15s ease;
 		}
 
 		.add-tab-btn:hover {
-			background: #37373d;
-			color: #d4d4d4;
+			background: var(--vscode-toolbar-hoverBackground, #37373d);
+			color: var(--vscode-foreground, #d4d4d4);
 		}
 
 		.main-container {
@@ -938,28 +996,34 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			width: 40%;
 			display: flex;
 			flex-direction: column;
-			background: #1e1e1e;
+			background: var(--vscode-panel-background, #1e1e1e);
+			transition: background-color 0.2s ease;
 		}
 
 		.console-tabs {
 			display: flex;
-			background: #2d2d30;
-			border-bottom: 1px solid #3e3e42;
+			background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d30);
+			border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
+			transition: background-color 0.2s ease;
 		}
 
 		.console-tab {
 			padding: 8px 16px;
 			cursor: pointer;
 			font-size: 13px;
+			color: var(--vscode-panelTitle-inactiveForeground, #d4d4d4);
 			border-bottom: 2px solid transparent;
+			transition: background-color 0.15s ease, color 0.15s ease, border-bottom-color 0.15s ease;
 		}
 
 		.console-tab:hover {
-			background: #37373d;
+			background: var(--vscode-list-hoverBackground, #37373d);
+			color: var(--vscode-panelTitle-activeForeground, #ffffff);
 		}
 
 		.console-tab.active {
-			border-bottom-color: #007acc;
+			color: var(--vscode-panelTitle-activeForeground, #ffffff);
+			border-bottom-color: var(--vscode-panelTitle-activeBorder, #007acc);
 		}
 
 		.console-toolbar {
@@ -967,32 +1031,36 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			align-items: center;
 			gap: 8px;
 			padding: 6px 12px;
-			background: #252526;
-			border-bottom: 1px solid #3e3e42;
+			background: var(--vscode-panel-background, #252526);
+			border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
+			transition: background-color 0.2s ease;
 		}
 
 		.console-toolbar button {
 			padding: 4px 8px;
-			background: #3c3c3c;
-			color: #d4d4d4;
+			background: var(--vscode-button-secondaryBackground, #3c3c3c);
+			color: var(--vscode-button-secondaryForeground, #d4d4d4);
 			border: none;
 			border-radius: 2px;
 			cursor: pointer;
 			font-size: 12px;
+			transition: background-color 0.15s ease;
 		}
 
 		.console-toolbar button:hover {
-			background: #505050;
+			background: var(--vscode-button-secondaryHoverBackground, #505050);
 		}
 
 		.console-content {
 			flex: 1;
 			overflow-y: auto;
 			padding: 12px;
-			font-family: 'Consolas', 'Courier New', monospace;
-			font-size: 13px;
+			font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+			font-size: var(--vscode-editor-font-size, 13px);
 			line-height: 1.5;
-			background: #0e0e0e;
+			background: var(--vscode-terminal-background, #0e0e0e);
+			color: var(--vscode-terminal-foreground, #d4d4d4);
+			transition: background-color 0.2s ease, color 0.2s ease;
 		}
 
 		.console-content::-webkit-scrollbar {
@@ -1000,15 +1068,20 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.console-content::-webkit-scrollbar-thumb {
-			background: #424242;
+			background: var(--vscode-scrollbarSlider-background, #424242);
 			border-radius: 5px;
+		}
+
+		.console-content::-webkit-scrollbar-thumb:hover {
+			background: var(--vscode-scrollbarSlider-hoverBackground, #4f4f4f);
 		}
 
 		.console-input-container {
 			display: none;
 			padding: 12px;
-			background: #1a1a1a;
-			border-top: 1px solid #3e3e42;
+			background: var(--vscode-terminal-background, #1a1a1a);
+			border-top: 1px solid var(--vscode-panel-border, #3e3e42);
+			transition: background-color 0.2s ease;
 		}
 
 		.console-input-container.active {
@@ -1018,39 +1091,41 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.console-input-prompt {
-			color: #4ec9b0;
-			font-family: 'Consolas', 'Courier New', monospace;
+			color: var(--vscode-terminal-ansiCyan, #4ec9b0);
+			font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
 			font-size: 13px;
 			white-space: nowrap;
 		}
 
 		.console-input-field {
 			flex: 1;
-			background: #2d2d30;
-			border: 1px solid #3e3e42;
-			color: #d4d4d4;
+			background: var(--vscode-input-background, #2d2d30);
+			border: 1px solid var(--vscode-input-border, #3e3e42);
+			color: var(--vscode-input-foreground, #d4d4d4);
 			padding: 6px 10px;
-			font-family: 'Consolas', 'Courier New', monospace;
+			font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
 			font-size: 13px;
 			outline: none;
+			transition: border-color 0.15s ease;
 		}
 
 		.console-input-field:focus {
-			border-color: #007acc;
+			border-color: var(--vscode-focusBorder, #007acc);
 		}
 
 		.console-input-submit {
-			background: #007acc;
-			color: #ffffff;
+			background: var(--vscode-button-background, #007acc);
+			color: var(--vscode-button-foreground, #ffffff);
 			border: none;
 			padding: 6px 16px;
 			cursor: pointer;
 			font-size: 13px;
 			border-radius: 2px;
+			transition: background-color 0.15s ease;
 		}
 
 		.console-input-submit:hover {
-			background: #005a9e;
+			background: var(--vscode-button-hoverBackground, #005a9e);
 		}
 
 		.output-line {
@@ -1060,31 +1135,32 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.output-line.stdout {
-			color: #d4d4d4;
+			color: var(--vscode-terminal-foreground, #d4d4d4);
 		}
 
 		.output-line.stderr {
-			color: #f48771;
+			color: var(--vscode-terminal-ansiRed, #f48771);
 		}
 
 		.output-line.system {
-			color: #858585;
+			color: var(--vscode-descriptionForeground, #858585);
 			font-style: italic;
 		}
 
 		.output-line.success {
-			color: #4ec9b0;
+			color: var(--vscode-terminal-ansiGreen, #4ec9b0);
 		}
 
 		.output-line.error {
-			color: #f48771;
+			color: var(--vscode-errorForeground, #f48771);
 			font-weight: bold;
 		}
 
 		.gutter {
-			background-color: #2d2d30;
+			background-color: var(--vscode-sideBar-background, #2d2d30);
 			background-repeat: no-repeat;
 			background-position: 50%;
+			transition: background-color 0.2s ease;
 		}
 
 		.gutter.gutter-horizontal {
@@ -1093,7 +1169,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		}
 
 		.gutter.gutter-horizontal:hover {
-			background-color: #007acc;
+			background-color: var(--vscode-focusBorder, #007acc);
 		}
 	</style>
 </head>
@@ -1136,13 +1212,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 						<option value="black">Black</option>
 						<option value="autopep8">autopep8</option>
 						<option value="none">None</option>
-					</select>
-				</div>
-				<div class="settings-item">
-					<label>Theme:</label>
-					<select id="themeSelect">
-						<option value="dark">Dark</option>
-						<option value="light">Light</option>
 					</select>
 				</div>
 			</div>
@@ -1252,11 +1321,18 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			let lspMessageId = 0;
 			let lspPendingRequests = new Map();
 
-			// Listen for LSP server ready message from extension
+			// Listen for messages from extension
 			window.addEventListener('message', (event) => {
 				const message = event.data;
 				if (message.command === 'lspServerReady') {
 					initializeLanguageClient(message.port);
+				} else if (message.command === 'themeChanged') {
+					// Update Monaco editor theme based on VS Code theme
+					const monacoTheme = message.themeKind === 'light' ? 'vs' :
+					                   message.themeKind === 'high-contrast' ? 'hc-black' : 'vs-dark';
+					if (editor) {
+						monaco.editor.setTheme(monacoTheme);
+					}
 				}
 			});
 
@@ -1601,14 +1677,12 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 					quickSuggestions: settings.enableIntelliSense,
 					parameterHints: { enabled: settings.enableIntelliSense },
 					suggestOnTriggerCharacters: settings.enableIntelliSense,
-					theme: settings.theme === 'dark' ? 'vs-dark' : 'vs',
 					fontSize: settings.fontSize
 				});
 
 				document.getElementById('intellisenseToggle').checked = settings.enableIntelliSense;
 				document.getElementById('formatOnSaveToggle').checked = settings.formatOnSave;
 				document.getElementById('formatterSelect').value = settings.formatter;
-				document.getElementById('themeSelect').value = settings.theme;
 			}
 
 			function updateSetting(key, value) {
@@ -1674,10 +1748,6 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 
 			document.getElementById('formatterSelect').addEventListener('change', (e) => {
 				updateSetting('formatter', e.target.value);
-			});
-
-			document.getElementById('themeSelect').addEventListener('change', (e) => {
-				updateSetting('theme', e.target.value);
 			});
 
 			// Keyboard shortcuts
