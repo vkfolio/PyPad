@@ -1107,6 +1107,22 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 			height: 100%;
 		}
 
+		.resizer {
+			width: 4px;
+			background: var(--vscode-sideBar-background, #2d2d30);
+			cursor: col-resize;
+			flex-shrink: 0;
+			transition: background-color 0.15s ease;
+		}
+
+		.resizer:hover {
+			background: var(--vscode-focusBorder, #007acc);
+		}
+
+		.resizer.resizing {
+			background: var(--vscode-focusBorder, #007acc);
+		}
+
 		.console-panel {
 			width: 40%;
 			display: flex;
@@ -1389,6 +1405,8 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 		<div class="editor-container" id="editorPane">
 			<div id="editor"></div>
 		</div>
+
+		<div class="resizer" id="resizer"></div>
 
 		<div class="console-panel" id="consolePane">
 			<div class="console-tabs">
@@ -1924,6 +1942,48 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
 				} else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
 					e.preventDefault();
 					saveCurrentFile();
+				}
+			});
+
+			// Resizable console panel
+			const resizer = document.getElementById('resizer');
+			const editorPane = document.getElementById('editorPane');
+			const consolePane = document.getElementById('consolePane');
+			const mainContainer = document.getElementById('mainContainer');
+			let isResizing = false;
+
+			resizer.addEventListener('mousedown', (e) => {
+				isResizing = true;
+				resizer.classList.add('resizing');
+				document.body.style.cursor = 'col-resize';
+				document.body.style.userSelect = 'none';
+			});
+
+			window.addEventListener('mousemove', (e) => {
+				if (!isResizing) return;
+
+				const containerRect = mainContainer.getBoundingClientRect();
+				const newEditorWidth = e.clientX - containerRect.left;
+				const totalWidth = containerRect.width;
+				const minWidth = 200; // Minimum width for both panels
+
+				// Calculate as percentage
+				const editorPercentage = (newEditorWidth / totalWidth) * 100;
+				const consolePercentage = 100 - editorPercentage;
+
+				// Enforce minimum widths
+				if (newEditorWidth >= minWidth && (totalWidth - newEditorWidth) >= minWidth) {
+					editorPane.style.width = editorPercentage + '%';
+					consolePane.style.width = consolePercentage + '%';
+				}
+			});
+
+			window.addEventListener('mouseup', () => {
+				if (isResizing) {
+					isResizing = false;
+					resizer.classList.remove('resizing');
+					document.body.style.cursor = '';
+					document.body.style.userSelect = '';
 				}
 			});
 
